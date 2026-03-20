@@ -1,0 +1,5 @@
+[33mb15a639[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mnasya[m[33m)[m Added POI list UI with expandable cards and styled buttons
+[33m74c3854[m[33m ([m[1;31morigin/nasya[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m)[m Fix merge: remove duplicate loadStyle
+[33m9288d34[m Merge pull request #7 from ethanmeyer902/route66-highlight
+[33m60a0ec0[m[33m ([m[1;31morigin/route66-highlight[m[33m)[m Merge branch 'main' into route66-highlight
+[33m93dba38[m Merge pull request #6 from ethanmeyer902/nasya

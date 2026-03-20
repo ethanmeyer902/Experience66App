@@ -22,6 +22,8 @@ import androidx.recyclerview.widget.RecyclerView
 
 class PoiListActivity : ComponentActivity() {
 
+    private var tts: android.speech.tts.TextToSpeech? = null
+    private var isTtsReady = false
     private lateinit var poiAdapter: PoiAdapter
     private lateinit var allPois: List<Route66Landmark>
 
@@ -49,33 +51,28 @@ class PoiListActivity : ComponentActivity() {
             onShow = { landmark ->
                 val data = Intent()
                     .putExtra("landmark_id", landmark.id)
-                    .putExtra("action", "show")
                 setResult(RESULT_OK, data)
                 finish()
             },
             onNavigate = { landmark ->
-                val data = Intent()
-                    .putExtra("landmark_id", landmark.id)
-                    .putExtra("action", "navigate")
-                setResult(RESULT_OK, data)
-                finish()
+                navigateToLandmark(landmark)
             },
             onAbout = { landmark ->
-                val data = Intent()
-                    .putExtra("landmark_id", landmark.id)
-                    .putExtra("action", "about")
-                setResult(RESULT_OK, data)
-                finish()
+                openAboutForLandmark(landmark)
             },
             onListen = { landmark ->
-                val data = Intent()
-                    .putExtra("landmark_id", landmark.id)
-                    .putExtra("action", "listen")
-                setResult(RESULT_OK, data)
-                finish()
+                listenToLandmark(landmark)
             }
         )
-
+        tts = android.speech.tts.TextToSpeech(this) { status ->
+            if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                val result = tts?.setLanguage(java.util.Locale.US)
+                isTtsReady = result != android.speech.tts.TextToSpeech.LANG_MISSING_DATA &&
+                        result != android.speech.tts.TextToSpeech.LANG_NOT_SUPPORTED
+            } else {
+                isTtsReady = false
+            }
+        }
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#F5F5F5"))
@@ -140,6 +137,108 @@ class PoiListActivity : ComponentActivity() {
         setContentView(rootLayout)
 
         poiAdapter.submitList(allPois)
+    }
+    override fun onDestroy() {
+        super.onDestroy()
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+    }
+    private fun navigateToLandmark(landmark: Route66Landmark) {
+        val lat = landmark.latitude
+        val lon = landmark.longitude
+
+        val gmmIntentUri = android.net.Uri.parse("google.navigation:q=$lat,$lon&mode=d")
+        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
+            setPackage("com.google.android.apps.maps")
+        }
+
+        if (mapIntent.resolveActivity(packageManager) != null) {
+            startActivity(mapIntent)
+        } else {
+            val browserUri = android.net.Uri.parse(
+                "https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving"
+            )
+            startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+        }
+    }
+
+    private fun listenToLandmark(landmark: Route66Landmark) {
+        if (!isTtsReady || tts == null) {
+            android.widget.Toast.makeText(this, "Voice not ready yet", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val textToSpeak = buildString {
+            append(landmark.name).append(". ")
+            append(landmark.description)
+        }
+
+        tts?.stop()
+        tts?.speak(
+            textToSpeak,
+            android.speech.tts.TextToSpeech.QUEUE_FLUSH,
+            null,
+            "POI_LIST_TTS"
+        )
+    }
+
+    private fun openAboutForLandmark(landmark: Route66Landmark) {
+        Thread {
+            try {
+                val archiveRepository = ArchiveRepository(this)
+                val route66Repository = Route66DatabaseRepository(this)
+
+                if (!archiveRepository.isLoaded) {
+                    archiveRepository.loadArchiveData()
+                }
+
+                val allItems = archiveRepository.getAllItems()
+                val matchedItems = route66Repository
+                    .matchArchiveItemsToLandmark(landmark, allItems)
+                    .toMutableList()
+
+                if (matchedItems.isEmpty()) {
+                    val landmarkNameLower = landmark.name.lowercase()
+                    val landmarkIdLower = landmark.id.lowercase()
+                    val landmarkWords = landmarkNameLower
+                        .split(" ", "-", "_", "'", "Ghost", "Town")
+                        .filter { it.length > 3 }
+
+                    allItems.forEach { item ->
+                        val callLower = item.callNumber.lowercase()
+                        val matches = landmarkWords.any { word -> callLower.contains(word) } ||
+                                callLower.contains(landmarkIdLower)
+
+                        if (matches && !matchedItems.contains(item)) {
+                            matchedItems.add(item)
+                        }
+                    }
+                }
+
+                runOnUiThread {
+                    if (matchedItems.isNotEmpty()) {
+                        val firstItem = matchedItems.first()
+                        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(firstItem.referenceUrl)))
+                    } else {
+                        val contentDmBaseUrl = "http://cdm16748.contentdm.oclc.org"
+                        val collectionUrl = "$contentDmBaseUrl/digital/collection/cpa"
+                        val searchQuery = landmark.name.replace(" ", "+").replace("'", "%27")
+                        val searchUrl = "$collectionUrl/search/searchterm/$searchQuery"
+
+                        startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(searchUrl)))
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    android.widget.Toast.makeText(
+                        this,
+                        "Could not open archive: ${e.message}",
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }.start()
     }
 }
 

@@ -57,7 +57,8 @@ import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
 import com.mapbox.maps.extension.style.style
 import com.mapbox.maps.extension.style.sources.addSource
 import com.mapbox.maps.extension.style.layers.addLayer
-
+import android.text.Editable
+import android.text.TextWatcher
 
 /**
  * Main activity for Route 66 Experience app
@@ -143,7 +144,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var searchResultsContainer: LinearLayout
     private lateinit var searchPanel: LinearLayout
     private var isSearchVisible = false
-    private var currentSearchResults: List<Route66ArchiveItem> = emptyList()
     
     // Archive Item Detail Card
     private lateinit var archiveDetailCard: LinearLayout
@@ -458,13 +458,12 @@ class MainActivity : ComponentActivity() {
             tintDot(d1, step == 0)
             tintDot(d2, step == 1)
             tintDot(d3, step == 2)
-            tintDot(d4, step == 3)
+
         }
 
         val pages = listOf(
             "Explore historic Route 66 landmarks across Arizona.\n\nTap markers on the map to discover stories, photos, and archive materials.",
             "Use the search bar to find a POI or archive item.\n\nTap any marker on the map to open its detail card. \n\nOr use the POIs button to see a list.",
-            "Tap MONITOR to see active geofences and entry/exit events.\n\n Tap UPDATE to cache landmarks and map data for offline use.\n\nWhen offline, the app will use cached data automatically.",
             "The ABOUT button inside a POI card will take you straight to the archive.\n\nTap NAVIGATE inside a POI card to get directions.\n\nTap LISTEN to hear the landmark description."
         )
 
@@ -729,7 +728,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun updateOfflineStatusUI() {
         val cacheInfo = offlineDataCache.getCacheInfo()
-        
+
         if (isOnline) {
             offlineStatusBar.setBackgroundColor(Color.parseColor("#4CAF50"))
             offlineStatusIcon.text = "🟢"
@@ -835,7 +834,6 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun createTopSearchAndButtons(rootLayout: FrameLayout) {
-        // A vertical container pinned to the top (UNDER the offlineStatusBar)
         val topContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
@@ -843,51 +841,42 @@ class MainActivity : ComponentActivity() {
             elevation = 12f
         }
 
-        // --- Buttons row (ON TOP now) ---
-        val buttonRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(0, 0, 0, 10.dp())
-        }
-
-        fun addGap() {
-            buttonRow.addView(View(this).apply {
-                layoutParams = LinearLayout.LayoutParams(10.dp(), 1)
-            })
-        }
-
-
-        // POIs
-        val poisBtn = Button(this).apply {
-            text = "POIs"
-            textSize = 11f
-            setBackgroundColor(Color.parseColor("#424242"))
-            setTextColor(Color.WHITE)
-            setPadding(14.dp(), 10.dp(), 14.dp(), 10.dp())
-            setOnClickListener {
-                poiListLauncher.launch(Intent(this@MainActivity, PoiListActivity::class.java))
-            }
-        }
-
-        buttonRow.addView(poisBtn)
-
-        topContainer.addView(buttonRow)
-
-        // --- Search row (UNDER buttons now) ---
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
         searchBar = EditText(this).apply {
-            hint = "Search POI or Call Number..."
+            hint = "Search locations..."
             textSize = 14f
             setPadding(14.dp(), 12.dp(), 14.dp(), 12.dp())
-            setBackgroundColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+            setBackgroundColor(Color.parseColor("#F2F2F2"))
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            ).apply {
                 marginEnd = 10.dp()
             }
             setSingleLine(true)
+
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    val query = s?.toString().orEmpty().trim()
+                    if (query.isBlank()) {
+                        searchPanel.visibility = View.GONE
+                        isSearchVisible = false
+                        searchResultsContainer.removeAllViews()
+                    } else {
+                        performSearch()
+                    }
+                }
+
+                override fun afterTextChanged(s: Editable?) {}
+            })
+
             setOnEditorActionListener { _, _, _ ->
                 performSearch()
                 true
@@ -906,7 +895,26 @@ class MainActivity : ComponentActivity() {
         searchRow.addView(searchIconBtn)
         topContainer.addView(searchRow)
 
-        // Add container to rootLayout pinned to TOP
+        val poisBtn = Button(this).apply {
+            text = "POIs"
+            textSize = 12f
+            setBackgroundColor(Color.parseColor("#424242"))
+            setTextColor(Color.WHITE)
+            setPadding(18.dp(), 10.dp(), 18.dp(), 10.dp())
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = 10.dp()
+                gravity = Gravity.END
+            }
+            setOnClickListener {
+                poiListLauncher.launch(Intent(this@MainActivity, PoiListActivity::class.java))
+            }
+        }
+
+        topContainer.addView(poisBtn)
+
         val params = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
@@ -919,15 +927,12 @@ class MainActivity : ComponentActivity() {
 
         rootLayout.addView(topContainer, params)
 
-        // After offlineStatusBar is measured, move this container below it
         rootLayout.post {
-            params.topMargin = offlineStatusBar.height
+            params.topMargin = offlineStatusBar.height + 8.dp()
             topContainer.layoutParams = params
         }
     }
-
     private fun createSearchResultsPanel(rootLayout: FrameLayout) {
-        // Panel that holds the results (hidden until you search)
         searchPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#F5F5F5"))
@@ -936,7 +941,6 @@ class MainActivity : ComponentActivity() {
             visibility = View.GONE
         }
 
-        // Scroll area
         searchResultsScrollView = ScrollView(this).apply {
             isFillViewport = true
             layoutParams = LinearLayout.LayoutParams(
@@ -945,7 +949,6 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        // Container inside scroll
         searchResultsContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(
@@ -964,199 +967,60 @@ class MainActivity : ComponentActivity() {
             gravity = Gravity.TOP
             leftMargin = 8.dp()
             rightMargin = 8.dp()
-            // push below the offline bar + your top search/buttons container (we set after layout)
             topMargin = 0
         }
 
         rootLayout.addView(searchPanel, params)
 
-        // Move panel below the offlineStatusBar + top container height
         rootLayout.post {
-            val topOffset = offlineStatusBar.height
-            params.topMargin = topOffset + 110.dp() // simple safe offset; adjust if needed
+            val topContainerHeight = (searchBar.parent.parent as View).height
+            params.topMargin = offlineStatusBar.height + topContainerHeight + 12.dp()
             searchPanel.layoutParams = params
         }
     }
-
     /**
      * Perform search for POI or call number
      */
     private fun performSearch() {
+        val query = searchBar.text.toString().trim()
+
+        if (query.isBlank()) {
+            searchPanel.visibility = View.GONE
+            isSearchVisible = false
+            searchResultsContainer.removeAllViews()
+            return
+        }
+
+        val results = route66DatabaseRepository.searchLandmarks(query).ifEmpty {
+            ArizonaLandmarks.landmarks.filter { landmark ->
+                landmark.name.contains(query, ignoreCase = true) ||
+                        landmark.id.contains(query, ignoreCase = true)
+            }
+        }
+
+        displayPoiSearchResults(query, results)
+    }
+    private fun displayPoiSearchResults(query: String, results: List<Route66Landmark>) {
+        searchResultsContainer.removeAllViews()
         searchPanel.visibility = View.VISIBLE
         isSearchVisible = true
 
-        val query = searchBar.text.toString().trim()
-        
-        if (query.isBlank()) {
-            Toast.makeText(this, "Please enter a search term", Toast.LENGTH_SHORT).show()
-            return
-        }
-        
-        // Show loading
-        searchResultsContainer.removeAllViews()
-        val loadingText = TextView(this).apply {
-            text = "🔍 Searching..."
-            textSize = 14f
-            setTextColor(Color.parseColor("#616161"))
-            setPadding(16, 16, 16, 16)
-            gravity = Gravity.CENTER
-        }
-        searchResultsContainer.addView(loadingText)
-        
-        // Perform search on background thread
-        Thread {
-            try {
-                Log.d(TAG, "Starting search for: '$query'")
-                val results = archiveRepository.searchByPoi(query)
-                Log.d(TAG, "Search completed, found ${results.size} results")
-                
-                runOnUiThread {
-                    if (results.isEmpty()) {
-                        Log.w(TAG, "No results found, checking if archive is loaded...")
-                        val itemCount = archiveRepository.getItemCount()
-                        Log.d(TAG, "Total archive items available: $itemCount")
-                    }
-                    displaySearchResults(query, results)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error during search: ${e.message}", e)
-                runOnUiThread {
-                    val errorText = TextView(this@MainActivity).apply {
-                        text = "❌ Error searching: ${e.message}\n\nPlease try again or check logs."
-                        setTextColor(Color.parseColor("#F44336"))
-                        textSize = 12f
-                        setPadding(16, 16, 16, 16)
-                    }
-                    searchResultsContainer.removeAllViews()
-                    searchResultsContainer.addView(errorText)
-                }
-            }
-        }.start()
-    }
-    
-    /**
-     * Display search results as clickable items
-     */
-    private fun displaySearchResults(query: String, results: List<Route66ArchiveItem>) {
-        currentSearchResults = results
-        searchResultsContainer.removeAllViews()
-        
         if (results.isEmpty()) {
             val noResultsText = TextView(this).apply {
-                text = "❌ No results found for '$query'\n\n" +
-                        "💡 Try searching for:\n" +
-                        "• POI names: 'Oatman', 'Kingman', 'Flagstaff', 'Winslow'\n" +
-                        "• Call numbers: 'NAU.PH.2004', 'NAU.PH.2010'\n" +
-                        "• Landmark IDs: 'oatman', 'kingman', 'flagstaff'\n\n" +
-                        "📊 Total archive items: ${archiveRepository.getItemCount()}"
+                text = "No locations found for \"$query\""
                 setTextColor(Color.parseColor("#F44336"))
-                textSize = 12f
+                textSize = 13f
                 setPadding(16, 16, 16, 16)
             }
             searchResultsContainer.addView(noResultsText)
             return
         }
-        
-        // Check if this is a POI search and show landmark info
-        val searchTerm = query.lowercase().trim()
-        val matchingLandmark = route66DatabaseRepository.searchLandmarks(query).firstOrNull()
-            ?: ArizonaLandmarks.landmarks.find { landmark ->
-                landmark.name.lowercase().contains(searchTerm) ||
-                landmark.id.lowercase().contains(searchTerm) ||
-                searchTerm.contains(landmark.name.lowercase()) ||
-                searchTerm.contains(landmark.id.lowercase())
-            }
-        
-        // If POI found, navigate map to that location and find matching archive items
-        if (matchingLandmark != null) {
-            // Navigate map camera to the POI location
-            mapView.mapboxMap.setCamera(
-                CameraOptions.Builder()
-                    .center(Point.fromLngLat(matchingLandmark.longitude, matchingLandmark.latitude))
-                    .zoom(14.0) // Zoom in close to the POI
-                    .build()
-            )
-            
-            // Highlight the landmark on the map
-            highlightLandmark(matchingLandmark.id, true)
-            
-            // Find archive items that match this POI using call number matching
-            Thread {
-                val matchedItems = findArchiveItemsForLandmark(matchingLandmark)
-                runOnUiThread {
-                    currentLandmarkArchiveItems = matchedItems
-                    if (matchedItems.isNotEmpty()) {
-                        Log.d(TAG, "Found ${matchedItems.size} archive items for ${matchingLandmark.name}")
-                    }
-                }
-            }.start()
-            
-            Log.d(TAG, "Navigated map to ${matchingLandmark.name} at (${matchingLandmark.latitude}, ${matchingLandmark.longitude})")
-        }
-        
-        // Header with landmark info if found
-        val headerText = if (matchingLandmark != null) {
-            TextView(this).apply {
-                text = "📍 ${matchingLandmark.name}\n" +
-                       "${matchingLandmark.description}\n" +
-                       "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" +
-                       "📚 CONTENTdm Archive Database (${results.size} items):\n" +
-                       "🔗 All items linked to Call Numbers"
-                textSize = 12f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#1976D2"))
-                setPadding(12, 12, 12, 12)
-                setBackgroundColor(Color.parseColor("#E3F2FD"))
-            }
-        } else {
-            TextView(this).apply {
-                text = "✅ Found ${results.size} result(s) for '$query'\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                textSize = 13f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#1976D2"))
-                setPadding(12, 8, 12, 12)
-            }
-        }
-        searchResultsContainer.addView(headerText)
-        
-        // Always show all archive items when POI is found - this is the "database"
-        if (results.isNotEmpty()) {
-            // Create clickable result items for all results
-            results.take(50).forEachIndexed { index, item ->
-                val resultItem = createResultItemView(index + 1, item)
-                searchResultsContainer.addView(resultItem)
-            }
-            
-            // If POI found, automatically scroll to show items
-            if (matchingLandmark != null) {
-                searchResultsScrollView.post {
-                    searchResultsScrollView.smoothScrollTo(0, 0)
-                }
-            }
-        }
-        
-        if (results.size > 50) {
-            val moreText = TextView(this).apply {
-                text = "... and ${results.size - 50} more result(s)"
-                textSize = 12f
-                setTextColor(Color.parseColor("#757575"))
-                setPadding(16, 8, 16, 8)
-                gravity = Gravity.CENTER
-            }
-            searchResultsContainer.addView(moreText)
-        }
-        
-        if (matchingLandmark != null) {
-            Toast.makeText(this, "📍 ${matchingLandmark.name} - ${results.size} archive items loaded", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "✅ Found ${results.size} result(s) - Tap '🌐 Open' to view archive", Toast.LENGTH_SHORT).show()
+
+        results.take(20).forEach { landmark ->
+            searchResultsContainer.addView(createPoiLocationResultView(landmark))
         }
     }
-    
-    /**
-     * Create a clickable result item view
-     */
-    private fun createResultItemView(index: Int, item: Route66ArchiveItem): LinearLayout {
+    private fun createPoiLocationResultView(landmark: Route66Landmark): LinearLayout {
         val itemLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.WHITE)
@@ -1169,100 +1033,46 @@ class MainActivity : ComponentActivity() {
                 topMargin = 8
                 bottomMargin = 8
             }
+            setOnClickListener {
+                mapView.mapboxMap.setCamera(
+                    CameraOptions.Builder()
+                        .center(Point.fromLngLat(landmark.longitude, landmark.latitude))
+                        .zoom(14.0)
+                        .build()
+                )
+
+                highlightLandmark(landmark.id, true)
+                showLandmarkCard(landmark.id)
+
+                searchPanel.visibility = View.GONE
+                isSearchVisible = false
+            }
         }
-        
-        // Content row (title and info)
-        val contentRow = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                0,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1f
-            )
-        }
-        
-        // Title with Call Number
+
         val titleText = TextView(this).apply {
-            text = "📄 Call Number: ${item.callNumber}"
-            textSize = 14f
+            text = landmark.name
+            textSize = 16f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#212121"))
-            setPadding(0, 0, 0, 4)
-        }
-        contentRow.addView(titleText)
-        
-        // CONTENTdm info
-        val contentDmText = TextView(this).apply {
-            text = "   🆔 CONTENTdm Number: ${item.contentDmNumber}"
-            textSize = 12f
             setTextColor(Color.parseColor("#1976D2"))
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 2, 0, 2)
         }
-        contentRow.addView(contentDmText)
-        
-        // Item Number
-        val itemNumberText = TextView(this).apply {
-            text = "   🔢 Item Number: ${item.itemNumber}"
-            textSize = 11f
-            setTextColor(Color.parseColor("#757575"))
-            setPadding(0, 2, 0, 4)
-        }
-        contentRow.addView(itemNumberText)
-        
-        // CONTENTdm URL (clickable)
-        val urlText = TextView(this).apply {
-            text = "   🔗 ${item.referenceUrl}"
-            textSize = 10f
-            setTextColor(Color.parseColor("#4CAF50"))
-            setTypeface(null, Typeface.ITALIC)
-            setPadding(0, 2, 0, 4)
-            setOnClickListener {
-                openArchiveItemUrl(item)
+
+        val descriptionText = TextView(this).apply {
+            text = if (landmark.description.length > 120) {
+                landmark.description.take(120) + "..."
+            } else {
+                landmark.description
             }
+            textSize = 12f
+            setTextColor(Color.parseColor("#424242"))
+            setPadding(0, 6, 0, 0)
         }
-        contentRow.addView(urlText)
-        
-        itemLayout.addView(contentRow)
-        
-        // Buttons row
-        val buttonRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(0, 8, 0, 0)
-        }
-        
-        // "View Details" button
-        val viewDetailsButton = Button(this).apply {
-            text = "📋 Details"
-            textSize = 11f
-            setPadding(16, 8, 16, 8)
-            setBackgroundColor(Color.parseColor("#2196F3"))
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                showArchiveDetailCard(item)
-            }
-        }
-        buttonRow.addView(viewDetailsButton)
-        
-        // "Open Archive" button - directly opens the URL
-        val openButton = Button(this).apply {
-            text = "🌐 Open"
-            textSize = 11f
-            setPadding(16, 8, 16, 8)
-            setBackgroundColor(Color.parseColor("#4CAF50"))
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                openArchiveItemUrl(item)
-            }
-        }
-        buttonRow.addView(openButton)
-        
-        itemLayout.addView(buttonRow)
-        
+
+        itemLayout.addView(titleText)
+        itemLayout.addView(descriptionText)
+
         return itemLayout
     }
-    
+
     /**
      * Open archive item URL directly
      */
