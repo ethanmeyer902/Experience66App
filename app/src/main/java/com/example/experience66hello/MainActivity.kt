@@ -26,11 +26,14 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.EditText
+import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
+import com.google.android.gms.location.LocationServices
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.ImageHolder
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.LocationPuck2D
@@ -42,6 +45,7 @@ import com.mapbox.maps.plugin.annotation.generated.PointAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.createCircleAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.createPointAnnotationManager
 import com.mapbox.maps.plugin.locationcomponent.location
+import com.mapbox.maps.plugin.locationcomponent.OnIndicatorPositionChangedListener
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -70,6 +74,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var offlineDataCache: OfflineDataCache
     private lateinit var archiveRepository: ArchiveRepository
     private lateinit var route66DatabaseRepository: Route66DatabaseRepository
+    private val fusedLocationClient by lazy { LocationServices.getFusedLocationProviderClient(this) }
+    private var hasCenteredOnUserLocation = false
     //
     private var pendingGeofenceInit = false
     private var isStyleLoaded = false
@@ -117,6 +123,7 @@ class MainActivity : ComponentActivity() {
     // POI detail card UI components
     private lateinit var detailCard: LinearLayout
     private lateinit var detailTitleText: TextView
+    private lateinit var detailImageView: ImageView
     private lateinit var detailDescriptionText: TextView
     private lateinit var detailExtraText: TextView
     private lateinit var detailListenButton: Button
@@ -1796,8 +1803,58 @@ class MainActivity : ComponentActivity() {
         val locationComponent = mapView.location
         locationComponent.updateSettings {
             enabled = true
-            locationPuck = LocationPuck2D()
+            locationPuck = LocationPuck2D(
+                topImage = ImageHolder.from(R.drawable.user_location_dot),
+                bearingImage = null,
+                shadowImage = null
+            )
+            pulsingEnabled = false
         }
+        centerMapOnUserLocationIfAvailable()
+    }
+
+    private fun centerMapOnUserLocationIfAvailable() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
+        ) return
+
+        fusedLocationClient.lastLocation
+            .addOnSuccessListener { location ->
+                if (location != null) {
+                    mapView.mapboxMap.setCamera(
+                        CameraOptions.Builder()
+                            .center(Point.fromLngLat(location.longitude, location.latitude))
+                            .zoom(7.0)
+                            .build()
+                    )
+                    hasCenteredOnUserLocation = true
+                } else {
+                    centerWhenFirstLocationIndicatorArrives()
+                }
+            }
+            .addOnFailureListener {
+                Log.w(TAG, "Could not center map on user location: ${it.message}")
+                centerWhenFirstLocationIndicatorArrives()
+            }
+    }
+
+    private fun centerWhenFirstLocationIndicatorArrives() {
+        if (hasCenteredOnUserLocation) return
+        val locationComponent = mapView.location
+        val oneTimeListener = object : OnIndicatorPositionChangedListener {
+            override fun onIndicatorPositionChanged(point: Point) {
+                if (hasCenteredOnUserLocation) return
+                hasCenteredOnUserLocation = true
+                mapView.mapboxMap.setCamera(
+                    CameraOptions.Builder()
+                        .center(point)
+                        .zoom(7.0)
+                        .build()
+                )
+                locationComponent.removeOnIndicatorPositionChangedListener(this)
+            }
+        }
+        locationComponent.addOnIndicatorPositionChangedListener(oneTimeListener)
     }
 
     /**
@@ -1954,6 +2011,17 @@ class MainActivity : ComponentActivity() {
             )
         })
 
+        detailImageView = ImageView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                220.dp()
+            )
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setImageResource(R.mipmap.ic_launcher)
+        }
+        detailCard.addView(detailImageView)
+
         // Description
         detailDescriptionText = TextView(this).apply {
             textSize = 14.5f
@@ -2081,6 +2149,7 @@ class MainActivity : ComponentActivity() {
         }
 
         detailTitleText.text = title
+        detailImageView.setImageResource(resolveLandmarkImageRes(landmarkId))
         detailDescriptionText.text = description
         detailExtraText.text = extra
 
@@ -2314,6 +2383,16 @@ class MainActivity : ComponentActivity() {
      * Get currently active landmarks
      */
     fun getActiveLandmarks(): Set<String> = activeLandmarks.toSet()
+
+    /**
+     * Resolves the image reference for a POI card.
+     * Tries a POI-specific drawable first, then falls back to the app icon.
+     */
+    private fun resolveLandmarkImageRes(landmarkId: String): Int {
+        val resourceName = "poi_${landmarkId.lowercase().replace("-", "_")}"
+        val resourceId = resources.getIdentifier(resourceName, "drawable", packageName)
+        return if (resourceId != 0) resourceId else R.mipmap.ic_launcher
+    }
 
     // Lifecycle management
     override fun onStart() {

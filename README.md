@@ -1,75 +1,64 @@
 # Experience 66 - Route 66 Arizona Explorer
 
-An Android application showcasing historic Route 66 landmarks in Arizona with geofencing and offline capabilities.
+An Android app for exploring Arizona Route 66 POIs with interactive mapping, geofencing, search, offline support, and archive integration.
 
 ![Android](https://img.shields.io/badge/Android-3DDC84?style=flat&logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat&logo=kotlin&logoColor=white)
 ![Mapbox](https://img.shields.io/badge/Mapbox-000000?style=flat&logo=mapbox&logoColor=white)
 
+## Current Dataset
+
+The app now uses a cleaned POI dataset:
+
+- Asset file: `app/src/main/assets/Route_66_Database.csv`
+- Schema source: reduced landmarks CSV (cleaned Arizona-focused records)
+- POI description field: `Description` (preferred), with fallback behavior for legacy fields
+- Duplicate filtering: applied during repository load to return valid, unique POIs
+
 ## Features
 
-### C3 – Geofencing Landmark Detection
-Automatically detects when users approach historic Route 66 landmarks in Arizona.
+### Map and POI Experience
 
-| Feature | Description |
-|---------|-------------|
-| **11 Arizona Landmarks** | Oatman, Kingman, Hackberry, Seligman, Williams, Flagstaff, Meteor Crater, Winslow, Jack Rabbit, Holbrook, Petrified Forest |
-| **Geofence Events** | Enter, Exit, and Dwell detection |
-| **Visual Feedback** | Red markers for landmarks, blue circles for geofence radius |
-| **Monitor Panel** | Real-time event log with timestamps |
+- Interactive Mapbox map focused on Arizona Route 66
+- Route 66 corridor line rendered from `route66.geojson`
+- POI markers and geofence circles displayed on the map
+- POI detail card with name, historical description, and image
+- POI image resolution via `drawable/poi_<landmark_id>` with fallback to `ic_launcher`
+- POI list screen (`POIs` button) for quick browsing and map selection
 
-### C1 – Offline Caching for Maps & CONTENTdm Data
-Supports offline access for areas with limited connectivity along Route 66.
+### User Location
 
-| Feature | Description |
-|---------|-------------|
-| **Network Monitoring** | Real-time online/offline status indicator |
-| **Landmark Cache** | Stores metadata, historical notes, and coordinates |
-| **Offline Maps** | Downloads map tiles for Arizona Route 66 corridor |
-| **Auto-Cache** | Automatically caches data on first launch |
+- User location displayed as a custom blue dot with hazy outer ring
+- Map recenters around the user location at startup (broad zoom for POI context)
+- Location display activates after permission is granted
 
-## Screenshots
+### Geofencing and Monitoring
 
-```
-┌─────────────────────────────────┐
-│ 🟢 Online          [📥 Cache]  │  ← Status Bar
-├─────────────────────────────────┤
-│                                 │
-│     [Map with Route 66]         │
-│        📍 Flagstaff             │
-│     ◯ Geofence circles          │
-│        📍 Winslow               │
-│                                 │
-├─────────────────────────────────┤
-│ [Toggle Monitor]                │
-│ ┌─────────────────────────────┐ │
-│ │ REGISTERED GEOFENCES: 11    │ │
-│ │ • Oatman Ghost Town (300m)  │ │
-│ │ • Kingman (500m)            │ │
-│ │ ...                         │ │
-│ ├─────────────────────────────┤ │
-│ │ EVENT LOG:                  │ │
-│ │ 14:32 ENTER Flagstaff       │ │
-│ │ 14:28 EXIT Williams         │ │
-│ └─────────────────────────────┘ │
-└─────────────────────────────────┘
-```
+- Geofence registration for loaded POIs
+- ENTER, EXIT, and DWELL transition handling
+- Real-time monitor panel showing registered geofences and event log
+- Active geofence visual highlight updates on the map
 
-## Arizona Route 66 Landmarks
+### Search and Archive
 
-| # | Landmark | Location | Geofence Radius |
-|---|----------|----------|-----------------|
-| 1 | Oatman Ghost Town | 35.0264, -114.3823 | 300m |
-| 2 | Kingman | 35.1894, -114.0530 | 500m |
-| 3 | Hackberry General Store | 35.3707, -113.7301 | 200m |
-| 4 | Seligman | 35.3274, -112.8767 | 400m |
-| 5 | Williams | 35.2494, -112.1910 | 500m |
-| 6 | Flagstaff | 35.1983, -111.6513 | 600m |
-| 7 | Meteor Crater | 35.0275, -111.0225 | 400m |
-| 8 | Standin' on the Corner (Winslow) | 35.0242, -110.6974 | 150m |
-| 9 | Jack Rabbit Trading Post | 35.0245, -110.1042 | 200m |
-| 10 | Wigwam Motel (Holbrook) | 34.9014, -110.1580 | 200m |
-| 11 | Petrified Forest National Park | 35.0657, -109.7890 | 1000m |
+- Search POIs and archive-linked records by name/id/text
+- Camera navigation and highlight when a matching POI is found
+- Archive result list with details and direct external URL opening
+- POI `About` action opens matched archive item for the current landmark
+
+### POI Actions and Accessibility
+
+- `Listen` button uses Text-to-Speech for POI narration
+- `Navigate` button opens driving directions in Google Maps (or browser fallback)
+- Onboarding overlay introduces key app actions and workflows
+
+### Offline and Data Reliability
+
+- Cleaned CSV-backed POI loading (`Route_66_Database.csv`)
+- Duplicate filtering during repository load to keep valid unique POIs
+- Online/offline status bar with cache info
+- Manual `UPDATE` flow for metadata and offline map region caching
+- Cached POI data usage when network is unavailable
 
 ## Requirements
 
@@ -114,17 +103,21 @@ Or open in Android Studio and run on device/emulator.
 Experience66/
 ├── app/
 │   ├── src/main/java/com/example/experience66hello/
-│   │   ├── MainActivity.kt              # Main app with map and UI
-│   │   ├── Route66Landmark.kt           # Landmark data model
-│   │   ├── GeofenceManager.kt           # Geofence registration
-│   │   ├── GeofenceBroadcastReceiver.kt # Geofence event handling
-│   │   ├── OfflineMapManager.kt         # Offline map tiles
-│   │   ├── OfflineDataCache.kt          # Landmark metadata cache
-│   │   ├── LandmarkDataCache.kt         # Historical data cache
-│   │   └── NetworkUtils.kt              # Network monitoring
-│   └── src/main/res/
-│       ├── drawable/red_marker.xml      # Landmark marker icon
-│       └── values/mapbox-resource-token.xml
+│   │   ├── MainActivity.kt                # Main map UI, POI cards, search, monitor
+│   │   ├── Route66Landmark.kt             # POI model
+│   │   ├── Route66DatabaseEntry.kt        # CSV entry model
+│   │   ├── Route66DatabaseParser.kt       # CSV parser
+│   │   ├── Route66DatabaseRepository.kt   # POI data access + dedupe
+│   │   ├── GeofenceManager.kt             # Geofence registration
+│   │   ├── GeofenceBroadcastReceiver.kt   # Geofence event handling
+│   │   ├── OfflineMapManager.kt           # Offline map region cache
+│   │   ├── OfflineDataCache.kt            # Metadata cache
+│   │   └── ArchiveRepository.kt           # Archive item loading/search
+│   └── src/main/
+│       ├── assets/Route_66_Database.csv   # Active cleaned POI dataset
+│       └── res/
+│           ├── drawable/red_marker.xml
+│           └── values/mapbox-resource-token.xml
 ├── build.gradle.kts
 ├── settings.gradle.kts
 └── gradle.properties
@@ -141,22 +134,6 @@ The app requires the following permissions:
 | `INTERNET` | Map tiles and online features |
 | `ACCESS_NETWORK_STATE` | Offline mode detection |
 
-## Demo Instructions
-
-### Testing C3 - Geofencing
-1. Launch the app and grant location permissions
-2. Tap "Toggle Monitor" to see registered geofences
-3. Use Android Studio's emulator location controls to simulate movement
-4. Set location to a landmark (e.g., Flagstaff: 35.1983, -111.6513)
-5. Observe "ENTER" event in the monitor panel
-
-### Testing C1 - Offline Caching
-1. Launch the app (auto-caches data if online)
-2. Observe green "🟢 Online" status bar
-3. Tap "📥 Cache" to manually download offline data
-4. Enable Airplane Mode on device
-5. Observe orange "📴 Offline" status bar
-6. App continues working with cached data
 
 ## Technologies
 
@@ -164,7 +141,7 @@ The app requires the following permissions:
 - **Mapbox Maps SDK 11.5** - Interactive maps
 - **Google Play Services Location 21.2** - Geofencing API
 - **Android Jetpack** - Activity, Lifecycle components
-- **SharedPreferences** - Local data caching
+- **SharedPreferences** - Local caching/state
 
 ## License
 
