@@ -171,6 +171,7 @@ object Route66DatabaseParser {
                 historicName = getValue("Historic_Name").takeIf { it.isNotBlank() },
                 status = getValue("Status").takeIf { it.isNotBlank() },
                 statusYear = getValue("Status_Year").takeIf { it.isNotBlank() },
+                description = getValue("Description").takeIf { it.isNotBlank() },
                 narrative = getValue("Narrative").takeIf { it.isNotBlank() },
                 narrativeSrc = getValue("Narrative_Src").takeIf { it.isNotBlank() },
                 urlMoreInfo = getValue("URL_MoreInfo").takeIf { it.isNotBlank() },

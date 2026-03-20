@@ -37,7 +37,12 @@ class Route66DatabaseRepository(private val context: Context) {
             val convertStartTime = System.currentTimeMillis()
             landmarks = databaseEntries
                 .mapNotNull { it.toLandmark() }
-                .distinctBy { it.id } // Remove duplicate landmarks by ID
+                .distinctBy { landmark ->
+                    // Keep only unique, valid POIs from the cleaned dataset.
+                    val latKey = String.format("%.5f", landmark.latitude)
+                    val lonKey = String.format("%.5f", landmark.longitude)
+                    "${landmark.id}|${landmark.name.lowercase()}|$latKey|$lonKey"
+                }
             
             val convertTime = System.currentTimeMillis() - convertStartTime
             Log.d(TAG, "Landmark conversion took ${convertTime}ms")

@@ -13,6 +13,7 @@ data class Route66DatabaseEntry(
     val historicName: String?,
     val status: String?,
     val statusYear: String?,
+    val description: String?,
     val narrative: String?,
     val narrativeSrc: String?,
     val urlMoreInfo: String?,
@@ -35,15 +36,16 @@ data class Route66DatabaseEntry(
         // Create ID from locationId, replacing dashes and spaces with underscores
         val id = locationId.lowercase().replace("-", "_").replace(" ", "_")
         
-        // Use narrative as description, fallback to historic name or regular name
-        val description = narrative?.takeIf { it.isNotBlank() } 
+        // Use cleaned CSV description first, then fallback to legacy narrative/historic fields.
+        val landmarkDescription = description?.takeIf { it.isNotBlank() }
+            ?: narrative?.takeIf { it.isNotBlank() }
             ?: historicName?.takeIf { it.isNotBlank() }
             ?: name
         
         return Route66Landmark(
             id = id,
             name = name,
-            description = description,
+            description = landmarkDescription,
             latitude = latitude,
             longitude = longitude,
             radiusMeters = 600f, // Default radius as specified
