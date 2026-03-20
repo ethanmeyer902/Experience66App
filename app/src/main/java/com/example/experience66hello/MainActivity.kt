@@ -68,7 +68,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val TAG = "MainActivity"
     }
-    private var topUpdateButton: Button? = null
     private lateinit var mapView: MapView
     private lateinit var geofenceManager: GeofenceManager
     private lateinit var offlineMapManager: OfflineMapManager
@@ -192,8 +191,34 @@ class MainActivity : ComponentActivity() {
     private val poiListLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
-                val id = result.data?.getStringExtra("landmark_id") ?: return@registerForActivityResult
-                showLandmarkCard(id)
+                val data = result.data ?: return@registerForActivityResult
+                val id = data.getStringExtra("landmark_id") ?: return@registerForActivityResult
+                val action = data.getStringExtra("action") ?: "show"
+
+                when (action) {
+                    "show" -> {
+                        showLandmarkCard(id)
+                    }
+                    "navigate" -> {
+                        val lm = route66DatabaseRepository.findLandmarkById(id)
+                            ?: ArizonaLandmarks.findById(id)
+
+                        if (lm != null) {
+                            showLandmarkCard(id)
+                            startNavigationTo(lm.toPoint())
+                        } else {
+                            Toast.makeText(this, "Landmark not found", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    "about" -> {
+                        showLandmarkCard(id)
+                        openAboutForCurrentLandmark()
+                    }
+                    "listen" -> {
+                        showLandmarkCard(id)
+                        readCurrentLandmark()
+                    }
+                }
             }
         }
 
@@ -739,9 +764,6 @@ class MainActivity : ComponentActivity() {
             downloadProgress.visibility = View.VISIBLE
             downloadProgress.progress = 0
         }
-        // Disable BOTH buttons if they exist
-        topUpdateButton?.isEnabled = false
-        topUpdateButton?.text = "⏳"
 
         // Cache landmark metadata first
         val metadataCached = offlineDataCache.cacheLandmarksData()
@@ -778,16 +800,13 @@ class MainActivity : ComponentActivity() {
             completeOfflineDownload(false, "Failed to cache metadata")
         }
     }
-    
+    //NO LONGER NECESSARY v
     /**
      * C1: Complete offline download process
      */
     private fun completeOfflineDownload(success: Boolean, message: String) {
         if (::downloadProgress.isInitialized) downloadProgress.visibility = View.GONE
 
-        // Re-enable BOTH buttons
-        topUpdateButton?.isEnabled = true
-        topUpdateButton?.text = "UPDATE"
 
         updateOfflineStatusUI()
         
@@ -799,7 +818,7 @@ class MainActivity : ComponentActivity() {
             Log.e(TAG, "Offline cache failed: $message")
         }
     }
-    
+    //NO LONGER NECESSARY v
     /**
      * C1: Initialize offline cache on startup
      */
@@ -837,26 +856,6 @@ class MainActivity : ComponentActivity() {
             })
         }
 
-        // UPDATE (reuse your cache/update action)
-        val updateBtn = Button(this).apply {
-            text = "UPDATE"
-            textSize = 11f
-            setBackgroundColor(Color.parseColor("#1976D2"))
-            setTextColor(Color.WHITE)
-            setPadding(14.dp(), 10.dp(), 14.dp(), 10.dp())
-            setOnClickListener { handleOfflineDownload() }
-        }
-        topUpdateButton = updateBtn
-
-        // MONITOR (reuse your toggle)
-        val monitorBtn = Button(this).apply {
-            text = "MONITOR"
-            textSize = 11f
-            setBackgroundColor(Color.parseColor("#2196F3"))
-            setTextColor(Color.WHITE)
-            setPadding(14.dp(), 10.dp(), 14.dp(), 10.dp())
-            setOnClickListener { toggleMonitorPanel() }
-        }
 
         // POIs
         val poisBtn = Button(this).apply {
@@ -870,8 +869,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        buttonRow.addView(updateBtn); addGap()
-        buttonRow.addView(monitorBtn); addGap()
         buttonRow.addView(poisBtn)
 
         topContainer.addView(buttonRow)
@@ -2261,8 +2258,8 @@ class MainActivity : ComponentActivity() {
             }.start()
         }
 
-        // Auto read when opened (if you want; you can remove this line to only read on button press)
-        readTextForLandmark(title, description, extra)
+        // Auto read when opened ( you can remove this line to only read on button press)
+        //readTextForLandmark(title, description, extra)
     }
 
     /**

@@ -2,13 +2,18 @@ package com.example.experience66hello
 
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.*
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -20,13 +25,17 @@ class PoiListActivity : ComponentActivity() {
     private lateinit var poiAdapter: PoiAdapter
     private lateinit var allPois: List<Route66Landmark>
 
-    private fun Int.dp(): Int = (this * resources.displayMetrics.density).toInt()
+    private fun Int.dp(): Int = (this * resources.displayMetrics.density + 0.5f).toInt()
 
     private fun filterList(query: String) {
         val filtered = if (query.isBlank()) {
             allPois
         } else {
-            allPois.filter { it.name.contains(query, ignoreCase = true) }
+            allPois.filter {
+                it.name.contains(query, ignoreCase = true) ||
+                        it.description.contains(query, ignoreCase = true) ||
+                        it.id.contains(query, ignoreCase = true)
+            }
         }
         poiAdapter.submitList(filtered)
     }
@@ -34,24 +43,45 @@ class PoiListActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Load your POIs (use whatever your app uses as the source)
-        allPois = ArizonaLandmarks.landmarks   // <-- change this if your source differs
+        allPois = ArizonaLandmarks.landmarks
 
-        poiAdapter = PoiAdapter { landmark ->
-            // Send selected POI back to MainActivity
-            val data = Intent().putExtra("landmark_id", landmark.id)
-            setResult(RESULT_OK, data)
-            finish()
-        }
+        poiAdapter = PoiAdapter(
+            onShow = { landmark ->
+                val data = Intent()
+                    .putExtra("landmark_id", landmark.id)
+                    .putExtra("action", "show")
+                setResult(RESULT_OK, data)
+                finish()
+            },
+            onNavigate = { landmark ->
+                val data = Intent()
+                    .putExtra("landmark_id", landmark.id)
+                    .putExtra("action", "navigate")
+                setResult(RESULT_OK, data)
+                finish()
+            },
+            onAbout = { landmark ->
+                val data = Intent()
+                    .putExtra("landmark_id", landmark.id)
+                    .putExtra("action", "about")
+                setResult(RESULT_OK, data)
+                finish()
+            },
+            onListen = { landmark ->
+                val data = Intent()
+                    .putExtra("landmark_id", landmark.id)
+                    .putExtra("action", "listen")
+                setResult(RESULT_OK, data)
+                finish()
+            }
+        )
 
-        // Root layout
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#F5F5F5"))
             setPadding(16.dp(), 16.dp(), 16.dp(), 16.dp())
         }
 
-        // --- Top row: Search + Back button ---
         val topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -64,7 +94,7 @@ class PoiListActivity : ComponentActivity() {
             }
             setSingleLine(true)
             setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
-            setBackgroundColor(Color.parseColor("#F2F2F2"))
+            setBackgroundColor(Color.WHITE)
 
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -77,8 +107,9 @@ class PoiListActivity : ComponentActivity() {
 
         val backBtn = Button(this).apply {
             text = "Back to Map"
+            setBackgroundColor(Color.parseColor("#424242"))
+            setTextColor(Color.WHITE)
             setOnClickListener {
-                // No selection, just go back
                 setResult(RESULT_CANCELED)
                 finish()
             }
@@ -88,12 +119,13 @@ class PoiListActivity : ComponentActivity() {
         topRow.addView(backBtn)
         rootLayout.addView(topRow)
 
-        // Spacer
         rootLayout.addView(View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 12.dp())
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                12.dp()
+            )
         })
 
-        // --- RecyclerView list ---
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@PoiListActivity)
             adapter = poiAdapter
@@ -103,69 +135,206 @@ class PoiListActivity : ComponentActivity() {
                 1f
             )
         }
-        rootLayout.addView(recyclerView)
 
+        rootLayout.addView(recyclerView)
         setContentView(rootLayout)
 
-        // Initial list
         poiAdapter.submitList(allPois)
     }
 }
 
-/** Adapter **/
 private class PoiAdapter(
-    private val onClick: (Route66Landmark) -> Unit
+    private val onShow: (Route66Landmark) -> Unit,
+    private val onNavigate: (Route66Landmark) -> Unit,
+    private val onAbout: (Route66Landmark) -> Unit,
+    private val onListen: (Route66Landmark) -> Unit
 ) : ListAdapter<Route66Landmark, PoiAdapter.VH>(DIFF) {
 
-    class VH(val row: LinearLayout, val title: TextView, val subtitle: TextView) :
-        RecyclerView.ViewHolder(row)
+    private val expandedIds = mutableSetOf<String>()
+
+    class VH(
+        val row: LinearLayout,
+        val headerBar: LinearLayout,
+        val title: TextView,
+        val expandBtn: TextView,
+        val descriptionText: TextView,
+        val buttonRow: LinearLayout,
+        val listenBtn: Button,
+        val aboutBtn: Button,
+        val navigateBtn: Button
+    ) : RecyclerView.ViewHolder(row)
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
         val context = parent.context
+        fun Int.dp(): Int = (this * context.resources.displayMetrics.density + 0.5f).toInt()
+
+        fun styleActionButton(button: Button, color: String) {
+            button.background = androidx.core.content.ContextCompat.getDrawable(
+                context,
+                R.drawable.btn_pill
+            )
+            button.backgroundTintList =
+                android.content.res.ColorStateList.valueOf(Color.parseColor(color))
+            button.setTextColor(Color.WHITE)
+            button.textSize = 12f
+            button.isAllCaps = false
+        }
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 14, 16, 14)
             setBackgroundColor(Color.WHITE)
             layoutParams = RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply {
-                bottomMargin = 12
+                bottomMargin = 14.dp()
             }
-            elevation = 2f
+            elevation = 10f
+        }
+
+        val headerBar = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#FF7A00"))
+            setPadding(18.dp(), 14.dp(), 18.dp(), 14.dp())
         }
 
         val title = TextView(context).apply {
-            textSize = 16f
-            setTextColor(Color.parseColor("#212121"))
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        val subtitle = TextView(context).apply {
-            textSize = 12f
-            setTextColor(Color.parseColor("#757575"))
+        val expandBtn = TextView(context).apply {
+            text = "▼"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(16, 8, 16, 8)
         }
 
-        row.addView(title)
-        row.addView(subtitle)
+        headerBar.addView(title)
+        headerBar.addView(expandBtn)
 
-        return VH(row, title, subtitle)
+        val descriptionText = TextView(context).apply {
+            textSize = 14.5f
+            setTextColor(Color.parseColor("#333333"))
+            setLineSpacing(6f, 1.05f)
+            setPadding(18.dp(), 16.dp(), 18.dp(), 8.dp())
+        }
+
+        val buttonRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(18.dp(), 8.dp(), 18.dp(), 16.dp())
+        }
+
+        val listenBtn = Button(context).apply {
+            text = "🔊 Listen"
+            styleActionButton(this, "#1976D2")
+        }
+
+        val aboutBtn = Button(context).apply {
+            text = "ℹ️ About"
+            styleActionButton(this, "#7B1FA2")
+        }
+
+        val navigateBtn = Button(context).apply {
+            text = "Navigate"
+            styleActionButton(this, "#2E7D32")
+        }
+
+        fun spacer(): View {
+            return View(context).apply {
+                layoutParams = LinearLayout.LayoutParams(12.dp(), 1)
+            }
+        }
+
+        buttonRow.addView(listenBtn)
+        buttonRow.addView(spacer())
+        buttonRow.addView(aboutBtn)
+        buttonRow.addView(spacer())
+        buttonRow.addView(navigateBtn)
+
+        row.addView(headerBar)
+        row.addView(descriptionText)
+        row.addView(buttonRow)
+
+        return VH(
+            row = row,
+            headerBar = headerBar,
+            title = title,
+            expandBtn = expandBtn,
+            descriptionText = descriptionText,
+            buttonRow = buttonRow,
+            listenBtn = listenBtn,
+            aboutBtn = aboutBtn,
+            navigateBtn = navigateBtn
+        )
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
         val item = getItem(position)
+        val isExpanded = expandedIds.contains(item.id)
+
         holder.title.text = item.name
-        holder.subtitle.text = item.id
-        holder.row.setOnClickListener { onClick(item) }
+
+        val fullDescription = item.description.ifBlank { "No description available." }
+        val previewDescription =
+            if (fullDescription.length > 140) fullDescription.take(140) + "..."
+            else fullDescription
+
+        if (isExpanded) {
+            holder.descriptionText.text = fullDescription
+            holder.descriptionText.maxLines = Int.MAX_VALUE
+            holder.descriptionText.ellipsize = null
+            holder.expandBtn.text = "▲"
+        } else {
+            holder.descriptionText.text = previewDescription
+            holder.descriptionText.maxLines = 3
+            holder.descriptionText.ellipsize = TextUtils.TruncateAt.END
+            holder.expandBtn.text = "▼"
+        }
+
+        holder.expandBtn.setOnClickListener {
+            if (expandedIds.contains(item.id)) {
+                expandedIds.remove(item.id)
+            } else {
+                expandedIds.add(item.id)
+            }
+
+            val currentPos = holder.bindingAdapterPosition
+            if (currentPos != RecyclerView.NO_POSITION) {
+                notifyItemChanged(currentPos)
+            }
+        }
+
+        holder.row.setOnClickListener {
+            onShow(item)
+        }
+
+        holder.listenBtn.setOnClickListener {
+            onListen(item)
+        }
+
+        holder.aboutBtn.setOnClickListener {
+            onAbout(item)
+        }
+
+        holder.navigateBtn.setOnClickListener {
+            onNavigate(item)
+        }
     }
 
     companion object {
         private val DIFF = object : DiffUtil.ItemCallback<Route66Landmark>() {
-            override fun areItemsTheSame(oldItem: Route66Landmark, newItem: Route66Landmark) =
-                oldItem.id == newItem.id
+            override fun areItemsTheSame(oldItem: Route66Landmark, newItem: Route66Landmark): Boolean {
+                return oldItem.id == newItem.id
+            }
 
-            override fun areContentsTheSame(oldItem: Route66Landmark, newItem: Route66Landmark) =
-                oldItem == newItem
+            override fun areContentsTheSame(oldItem: Route66Landmark, newItem: Route66Landmark): Boolean {
+                return oldItem == newItem
+            }
         }
     }
 }
