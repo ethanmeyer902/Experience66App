@@ -28,7 +28,8 @@ import android.widget.TextView
 import android.widget.Toast
 import android.widget.EditText
 import android.widget.ImageView
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.location.LocationServices
@@ -64,7 +65,7 @@ import android.text.TextWatcher
  * Main activity for Route 66 Experience app
  * Handles map display, POI search, geofencing, and archive integration
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     companion object {
         const val TAG = "MainActivity"
@@ -84,7 +85,8 @@ class MainActivity : ComponentActivity() {
 
     private var pointAnnotationManager: PointAnnotationManager? = null
     private var circleAnnotationManager: CircleAnnotationManager? = null
-    
+
+    private lateinit var poisBtn: Button
     // Track which landmarks the user is currently inside
     private val activeLandmarks = mutableSetOf<String>()
     
@@ -131,6 +133,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var detailListenButton: Button
     private lateinit var detailAboutButton: Button
 
+    private lateinit var topContainer: LinearLayout
+    private lateinit var searchClearBtn: TextView
     private val liveDistanceListener = OnIndicatorPositionChangedListener { point ->
         updateDistanceForCurrentLandmark(point)
     }
@@ -154,6 +158,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var archiveDetailUrl: TextView
     private lateinit var archiveOpenButton: Button
     private lateinit var archiveCloseButton: Button
+    //colors helper
+    private fun color(id: Int): Int {
+        return androidx.core.content.ContextCompat.getColor(this, id)
+    }
 
     data class GeofenceEvent(
         val landmarkId: String,
@@ -246,6 +254,13 @@ class MainActivity : ComponentActivity() {
     private fun Int.dp(): Int = (this * resources.displayMetrics.density + 0.5f).toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val darkModeEnabled = prefs.getBoolean(AppSettings.KEY_DARK_MODE, false)
+
+        AppCompatDelegate.setDefaultNightMode(
+            if (darkModeEnabled) AppCompatDelegate.MODE_NIGHT_YES
+            else AppCompatDelegate.MODE_NIGHT_NO
+        )
         super.onCreate(savedInstanceState)
 
         //initialize TTS
@@ -291,7 +306,6 @@ class MainActivity : ComponentActivity() {
 
         // Create and add Search UI
         createTopSearchAndButtons(rootLayout)
-        createSearchResultsPanel(rootLayout)
         // Create and add POI detail card
         createLandmarkDetailCard(rootLayout)
 
@@ -312,7 +326,9 @@ class MainActivity : ComponentActivity() {
                 .build()
         )
 
-        mapView.mapboxMap.loadStyle(Style.MAPBOX_STREETS) { style ->
+        val mapStyle = if (darkModeEnabled) Style.DARK else Style.MAPBOX_STREETS
+
+        mapView.mapboxMap.loadStyle(mapStyle) { style ->
             isStyleLoaded = true
             setupAnnotationManagers()
 
@@ -383,7 +399,7 @@ class MainActivity : ComponentActivity() {
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(color(R.color.card_background))
             setPadding(24.dp(), 24.dp(), 24.dp(), 24.dp())
             elevation = 20f
         }
@@ -391,13 +407,13 @@ class MainActivity : ComponentActivity() {
         val title = TextView(this).apply {
             textSize = 20f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#212121"))
+            setTextColor(color(R.color.text_primary))
             text = "Welcome to Experience66"
         }
 
         val body = TextView(this).apply {
             textSize = 14f
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setLineSpacing(6f, 1.05f)
             setPadding(0, 12.dp(), 0, 0)
         }
@@ -834,30 +850,58 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun createTopSearchAndButtons(rootLayout: FrameLayout) {
-        val topContainer = LinearLayout(this).apply {
+        topContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
             setBackgroundColor(Color.TRANSPARENT)
             elevation = 12f
         }
 
-        val searchRow = LinearLayout(this).apply {
+        val topRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val settingsBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_manage)
+            layoutParams = LinearLayout.LayoutParams(36.dp(), 36.dp()).apply {
+                marginEnd = 8.dp()
+            }
+            background = androidx.core.content.ContextCompat.getDrawable(
+                this@MainActivity,
+                R.drawable.btn_circle
+            )
+            backgroundTintList = android.content.res.ColorStateList.valueOf(color(R.color.accent_blue))
+            setColorFilter(color(R.color.white))
+            setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+            }
+        }
+
+        val searchBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(color(R.color.card_background))
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+            setPadding(10.dp(), 0, 10.dp(), 0)
         }
 
         searchBar = EditText(this).apply {
             hint = "Search locations..."
             textSize = 14f
-            setPadding(14.dp(), 12.dp(), 14.dp(), 12.dp())
-            setBackgroundColor(Color.parseColor("#F2F2F2"))
+            setTextColor(color(R.color.text_primary))
+            setHintTextColor(color(R.color.text_muted))
+            setBackgroundColor(Color.TRANSPARENT)
             layoutParams = LinearLayout.LayoutParams(
                 0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 1f
-            ).apply {
-                marginEnd = 10.dp()
-            }
+            )
             setSingleLine(true)
 
             addTextChangedListener(object : TextWatcher {
@@ -865,41 +909,45 @@ class MainActivity : ComponentActivity() {
 
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                     val query = s?.toString().orEmpty().trim()
+                    searchClearBtn.visibility = if (query.isBlank()) View.GONE else View.VISIBLE
+
                     if (query.isBlank()) {
                         searchPanel.visibility = View.GONE
                         isSearchVisible = false
                         searchResultsContainer.removeAllViews()
+                        poisBtn.visibility = View.VISIBLE
                     } else {
+                        poisBtn.visibility = View.GONE
                         performSearch()
                     }
                 }
 
                 override fun afterTextChanged(s: Editable?) {}
             })
+        }
 
-            setOnEditorActionListener { _, _, _ ->
-                performSearch()
-                true
+        searchClearBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 16f
+            setTextColor(color(R.color.text_muted))
+            visibility = View.GONE
+            setPadding(12.dp(), 8.dp(), 4.dp(), 8.dp())
+            setOnClickListener {
+                searchBar.setText("")
             }
         }
 
-        val searchIconBtn = android.widget.ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_search)
-            setBackgroundColor(Color.parseColor("#FF9800"))
-            setColorFilter(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(44.dp(), 44.dp())
-            setOnClickListener { performSearch() }
-        }
+        searchBox.addView(searchBar)
+        searchBox.addView(searchClearBtn)
 
-        searchRow.addView(searchBar)
-        searchRow.addView(searchIconBtn)
-        topContainer.addView(searchRow)
+        topRow.addView(settingsBtn)
+        topRow.addView(searchBox)
 
-        val poisBtn = Button(this).apply {
+        poisBtn = Button(this).apply {
             text = "POIs"
             textSize = 12f
-            setBackgroundColor(Color.parseColor("#424242"))
-            setTextColor(Color.WHITE)
+            setBackgroundColor(color(R.color.surface))
+            setTextColor(color(R.color.text_primary))
             setPadding(18.dp(), 10.dp(), 18.dp(), 10.dp())
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -908,34 +956,15 @@ class MainActivity : ComponentActivity() {
                 topMargin = 10.dp()
                 gravity = Gravity.END
             }
+
             setOnClickListener {
                 poiListLauncher.launch(Intent(this@MainActivity, PoiListActivity::class.java))
             }
         }
 
-        topContainer.addView(poisBtn)
-
-        val params = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            gravity = Gravity.TOP
-            leftMargin = 8.dp()
-            rightMargin = 8.dp()
-            topMargin = 0
-        }
-
-        rootLayout.addView(topContainer, params)
-
-        rootLayout.post {
-            params.topMargin = offlineStatusBar.height + 8.dp()
-            topContainer.layoutParams = params
-        }
-    }
-    private fun createSearchResultsPanel(rootLayout: FrameLayout) {
         searchPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            setBackgroundColor(color(R.color.surface))
             setPadding(12.dp(), 12.dp(), 12.dp(), 12.dp())
             elevation = 14f
             visibility = View.GONE
@@ -960,6 +989,10 @@ class MainActivity : ComponentActivity() {
         searchResultsScrollView.addView(searchResultsContainer)
         searchPanel.addView(searchResultsScrollView)
 
+        topContainer.addView(topRow)
+        topContainer.addView(poisBtn)
+        topContainer.addView(searchPanel)
+
         val params = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
@@ -970,14 +1003,14 @@ class MainActivity : ComponentActivity() {
             topMargin = 0
         }
 
-        rootLayout.addView(searchPanel, params)
+        rootLayout.addView(topContainer, params)
 
         rootLayout.post {
-            val topContainerHeight = (searchBar.parent.parent as View).height
-            params.topMargin = offlineStatusBar.height + topContainerHeight + 12.dp()
-            searchPanel.layoutParams = params
+            params.topMargin = offlineStatusBar.height + 8.dp()
+            topContainer.layoutParams = params
         }
     }
+
     /**
      * Perform search for POI or call number
      */
@@ -988,8 +1021,11 @@ class MainActivity : ComponentActivity() {
             searchPanel.visibility = View.GONE
             isSearchVisible = false
             searchResultsContainer.removeAllViews()
+            poisBtn.visibility = View.VISIBLE
             return
         }
+
+        poisBtn.visibility = View.GONE
 
         val results = route66DatabaseRepository.searchLandmarks(query).ifEmpty {
             ArizonaLandmarks.landmarks.filter { landmark ->
@@ -1000,6 +1036,7 @@ class MainActivity : ComponentActivity() {
 
         displayPoiSearchResults(query, results)
     }
+
     private fun displayPoiSearchResults(query: String, results: List<Route66Landmark>) {
         searchResultsContainer.removeAllViews()
         searchPanel.visibility = View.VISIBLE
@@ -1008,7 +1045,7 @@ class MainActivity : ComponentActivity() {
         if (results.isEmpty()) {
             val noResultsText = TextView(this).apply {
                 text = "No locations found for \"$query\""
-                setTextColor(Color.parseColor("#F44336"))
+                setTextColor(color(R.color.accent_red))
                 textSize = 13f
                 setPadding(16, 16, 16, 16)
             }
@@ -1023,7 +1060,7 @@ class MainActivity : ComponentActivity() {
     private fun createPoiLocationResultView(landmark: Route66Landmark): LinearLayout {
         val itemLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(color(R.color.card_background))
             setPadding(16, 12, 16, 12)
             elevation = 2f
             layoutParams = LinearLayout.LayoutParams(
@@ -1053,7 +1090,7 @@ class MainActivity : ComponentActivity() {
             text = landmark.name
             textSize = 16f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#1976D2"))
+            setTextColor(color(R.color.accent_blue))
         }
 
         val descriptionText = TextView(this).apply {
@@ -1063,7 +1100,7 @@ class MainActivity : ComponentActivity() {
                 landmark.description
             }
             textSize = 12f
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setPadding(0, 6, 0, 0)
         }
 
@@ -1093,7 +1130,7 @@ class MainActivity : ComponentActivity() {
     private fun createArchiveDetailCard(rootLayout: FrameLayout) {
         archiveDetailCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(color(R.color.card_background))
             setPadding(24, 24, 24, 24)
             elevation = 16f
             visibility = View.GONE
@@ -1104,7 +1141,7 @@ class MainActivity : ComponentActivity() {
             text = "Archive Item Details"
             textSize = 18f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#212121"))
+            setTextColor(color(R.color.text_primary))
             setPadding(0, 0, 0, 16)
         }
         archiveDetailCard.addView(archiveDetailTitle)
@@ -1112,7 +1149,7 @@ class MainActivity : ComponentActivity() {
         // Call Number
         archiveDetailCallNumber = TextView(this).apply {
             textSize = 14f
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setPadding(0, 4, 0, 4)
         }
         archiveDetailCard.addView(archiveDetailCallNumber)
@@ -1120,7 +1157,7 @@ class MainActivity : ComponentActivity() {
         // CONTENTdm Number
         archiveDetailContentDm = TextView(this).apply {
             textSize = 14f
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setPadding(0, 4, 0, 4)
         }
         archiveDetailCard.addView(archiveDetailContentDm)
@@ -1128,7 +1165,7 @@ class MainActivity : ComponentActivity() {
         // Item Number
         archiveDetailItemNumber = TextView(this).apply {
             textSize = 14f
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setPadding(0, 4, 0, 4)
         }
         archiveDetailCard.addView(archiveDetailItemNumber)
@@ -1136,7 +1173,7 @@ class MainActivity : ComponentActivity() {
         // URL
         archiveDetailUrl = TextView(this).apply {
             textSize = 12f
-            setTextColor(Color.parseColor("#2196F3"))
+            setTextColor(color(R.color.accent_blue))
             setPadding(0, 8, 0, 16)
             setTypeface(null, Typeface.ITALIC)
         }
@@ -1151,8 +1188,8 @@ class MainActivity : ComponentActivity() {
         // Open Archive Item button
         archiveOpenButton = Button(this).apply {
             text = "🌐 Open Archive Item"
-            setBackgroundColor(Color.parseColor("#4CAF50"))
-            setTextColor(Color.WHITE)
+            setBackgroundColor(color(R.color.accent_green))
+            setTextColor(color(R.color.white))
             setPadding(24, 12, 24, 12)
             setOnClickListener {
                 openArchiveItem()
@@ -1163,8 +1200,8 @@ class MainActivity : ComponentActivity() {
         // Close button
         archiveCloseButton = Button(this).apply {
             text = "✕ Close"
-            setBackgroundColor(Color.parseColor("#F44336"))
-            setTextColor(Color.WHITE)
+            setBackgroundColor(color(R.color.accent_red))
+            setTextColor(color(R.color.white))
             setPadding(24, 12, 24, 12)
             setOnClickListener {
                 hideArchiveDetailCard()
@@ -1236,7 +1273,7 @@ class MainActivity : ComponentActivity() {
         // Monitor panel (initially hidden)
         monitorPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            setBackgroundColor(color(R.color.surface))
             setPadding(16, 16, 16, 16)
             elevation = 8f
             visibility = View.GONE
@@ -1247,7 +1284,7 @@ class MainActivity : ComponentActivity() {
             text = "🗺️ GEOFENCE MONITOR"
             textSize = 18f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#1976D2"))
+            setTextColor(color(R.color.accent_blue))
             setPadding(0, 0, 0, 16)
         }
         monitorPanel.addView(titleView)
@@ -1257,7 +1294,7 @@ class MainActivity : ComponentActivity() {
             text = "📋 REGISTERED GEOFENCES (${ArizonaLandmarks.landmarks.size})"
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setPadding(0, 8, 0, 8)
         }
         monitorPanel.addView(geofenceHeader)
@@ -1272,8 +1309,8 @@ class MainActivity : ComponentActivity() {
         
         geofenceListTextView = TextView(this).apply {
             textSize = 11f
-            setTextColor(Color.parseColor("#616161"))
-            setBackgroundColor(Color.WHITE)
+            setTextColor(color(R.color.text_muted))
+            setBackgroundColor(color(R.color.card_background))
             setPadding(12, 12, 12, 12)
         }
         geofenceScrollView.addView(geofenceListTextView)
@@ -1281,7 +1318,7 @@ class MainActivity : ComponentActivity() {
         
         // Divider
         val divider = View(this).apply {
-            setBackgroundColor(Color.parseColor("#BDBDBD"))
+            setBackgroundColor(color(R.color.text_muted))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 2
@@ -1297,7 +1334,7 @@ class MainActivity : ComponentActivity() {
             text = "📜 EVENT LOG"
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#424242"))
+            setTextColor(color(R.color.text_secondary))
             setPadding(0, 0, 0, 8)
         }
         monitorPanel.addView(eventHeader)
@@ -1313,8 +1350,8 @@ class MainActivity : ComponentActivity() {
         eventLogTextView = TextView(this).apply {
             text = "Waiting for geofence events...\n(Use mock location to trigger ENTER/EXIT)"
             textSize = 11f
-            setTextColor(Color.parseColor("#757575"))
-            setBackgroundColor(Color.WHITE)
+            setTextColor(color(R.color.text_muted))
+            setBackgroundColor(color(R.color.card_background))
             setPadding(12, 12, 12, 12)
         }
         eventScrollView.addView(eventLogTextView)
@@ -1394,7 +1431,7 @@ class MainActivity : ComponentActivity() {
         }
         
         eventLogTextView.text = sb.toString()
-        eventLogTextView.setTextColor(Color.parseColor("#212121"))
+        eventLogTextView.setTextColor(color(R.color.text_primary))
     }
 
     private fun setupAnnotationManagers() {
@@ -1797,24 +1834,39 @@ class MainActivity : ComponentActivity() {
             circleAnnotationManager?.create(circleOptions)
         }
     }
-    
+
     private fun showEntryNotification(landmarkName: String) {
+        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val notificationsEnabled = prefs.getBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, true)
+
+        if (!notificationsEnabled) return
+
         Toast.makeText(
             this,
             "📍 ENTERED: $landmarkName",
             Toast.LENGTH_LONG
         ).show()
     }
-    
+
     private fun showExitNotification(landmarkName: String) {
+        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val notificationsEnabled = prefs.getBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, true)
+
+        if (!notificationsEnabled) return
+
         Toast.makeText(
             this,
             "👋 EXITED: $landmarkName",
             Toast.LENGTH_SHORT
         ).show()
     }
-    
+
     private fun showDwellNotification(landmarkName: String) {
+        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val notificationsEnabled = prefs.getBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, true)
+
+        if (!notificationsEnabled) return
+
         Toast.makeText(
             this,
             "⏱️ DWELLING at: $landmarkName",
@@ -1852,15 +1904,16 @@ class MainActivity : ComponentActivity() {
     private fun createLandmarkDetailCard(rootLayout: FrameLayout) {
         detailCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = androidx.core.content.ContextCompat.getDrawable(this@MainActivity, R.drawable.poi_card_bg)
+            setBackgroundColor(color(R.color.card_background))
             elevation = 18f
             clipToPadding = false
             visibility = View.GONE
+            setPadding(0, 0, 0, 16.dp())
         }
-        //header/Title
+
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#FF7A00"))
+            setBackgroundColor(color(R.color.accent_orange))
             setPadding(18, 14, 18, 14)
             gravity = Gravity.CENTER_VERTICAL
         }
@@ -1868,21 +1921,20 @@ class MainActivity : ComponentActivity() {
         detailTitleText = TextView(this).apply {
             textSize = 20f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(color(R.color.white))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         val closeX = TextView(this).apply {
             text = "✕"
             textSize = 20f
-            setTextColor(Color.WHITE)
+            setTextColor(color(R.color.white))
             setPadding(16, 0, 0, 0)
             setOnClickListener { hideLandmarkCard() }
         }
 
         headerRow.addView(detailTitleText)
         headerRow.addView(closeX)
-
         detailCard.addView(headerRow)
 
         detailCard.addView(View(this).apply {
@@ -1902,86 +1954,74 @@ class MainActivity : ComponentActivity() {
         }
         detailCard.addView(detailImageView)
 
-        // Description
         detailDescriptionText = TextView(this).apply {
             textSize = 14.5f
-            setTextColor(Color.parseColor("#333333"))
+            setTextColor(color(R.color.text_primary))
             setLineSpacing(6f, 1.05f)
-            setPadding(4, 6, 4, 6)
+            setPadding(16.dp(), 6.dp(), 16.dp(), 6.dp())
         }
         detailCard.addView(detailDescriptionText)
 
         detailDistanceText = TextView(this).apply {
             textSize = 13.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#2E7D32"))
-            setPadding(4, 0, 4, 8)
+            setTextColor(color(R.color.accent_green))
+            setPadding(16.dp(), 0, 16.dp(), 8.dp())
             visibility = View.GONE
         }
         detailCard.addView(detailDistanceText)
 
-        // Extra / historical notes
         detailExtraText = TextView(this).apply {
             textSize = 12.5f
-            setTextColor(Color.parseColor("#666666"))
-            setPadding(4, 0, 4, 10)
+            setTextColor(color(R.color.text_muted))
+            setPadding(16.dp(), 0, 16.dp(), 10.dp())
         }
-
         detailCard.addView(detailExtraText)
 
-        // Buttons row
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
+            setPadding(16.dp(), 0, 16.dp(), 0)
         }
 
-        fun styleButton(b: Button, color: String) {
-            b.background = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.btn_pill)
-            b.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor(color))
-            b.setTextColor(Color.WHITE)
-            b.textSize = 12f
-            b.isAllCaps = false
+        fun styleButton(button: Button, colorRes: Int) {
+            button.background = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.btn_pill)
+            button.backgroundTintList =
+                android.content.res.ColorStateList.valueOf(color(colorRes))
+            button.setTextColor(color(R.color.white))
+            button.textSize = 12f
+            button.isAllCaps = false
         }
 
-        // "Listen" button
         detailListenButton = Button(this).apply {
             text = "🔊 Listen"
-            setOnClickListener {
-                readCurrentLandmark()
-            }
+            setOnClickListener { readCurrentLandmark() }
         }
 
-        // "About" button - opens CONTENTdm for this POI
         detailAboutButton = Button(this).apply {
-            text = "ℹ️ About"
-            setBackgroundColor(Color.parseColor("#9C27B0"))
-            setTextColor(Color.WHITE)
-            setOnClickListener {
-                openAboutForCurrentLandmark()
-            }
+            text = "ℹ️ More"
+            setOnClickListener { openAboutForCurrentLandmark() }
         }
 
-        // Navigate button
         val navigateButton = Button(this).apply {
             text = "Navigate"
-                setOnClickListener {
-                    val dest = currentDestinationPoint
-                    if (dest != null) {
-                        startNavigationTo(dest)   // uses your existing function
-                    } else {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "No navigation target available",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+            setOnClickListener {
+                val dest = currentDestinationPoint
+                if (dest != null) {
+                    startNavigationTo(dest)
+                } else {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "No navigation target available",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
+            }
         }
 
-        //button style
-        styleButton(detailListenButton, "#1976D2")   // blue
-        styleButton(detailAboutButton, "#7B1FA2")    // purple
-        styleButton(navigateButton, "#2E7D32")       // green
+        styleButton(detailListenButton, R.color.accent_blue)
+        styleButton(detailAboutButton, R.color.accent_purple)
+        styleButton(navigateButton, R.color.accent_green)
 
         fun addSpacer() {
             buttonRow.addView(View(this).apply {
@@ -1991,24 +2031,22 @@ class MainActivity : ComponentActivity() {
 
         buttonRow.addView(detailListenButton); addSpacer()
         buttonRow.addView(detailAboutButton); addSpacer()
-        buttonRow.addView(navigateButton); addSpacer()
+        buttonRow.addView(navigateButton)
 
         detailCard.addView(buttonRow)
 
-        // Attach to bottom of rootLayout
         val params = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                gravity = Gravity.BOTTOM
-                leftMargin = 16
-                rightMargin = 16
-                bottomMargin = 32
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.BOTTOM
+            leftMargin = 16
+            rightMargin = 16
+            bottomMargin = 32
         }
 
         rootLayout.addView(detailCard, params)
-        }
-
+    }
 
     /**
      * Show details for the given landmark ID and read it aloud.

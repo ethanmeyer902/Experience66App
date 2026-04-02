@@ -58,7 +58,10 @@ dependencies {
     
     // Google Play Services for Geofencing
     implementation("com.google.android.gms:play-services-location:21.2.0")
-    
+    implementation(libs.material)
+    implementation(libs.androidx.activity)
+    implementation(libs.androidx.constraintlayout)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
