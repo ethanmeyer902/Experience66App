@@ -1,7 +1,6 @@
 package com.example.experience66hello
 
 import android.content.Intent
-import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Editable
@@ -12,20 +11,27 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 
-class PoiListActivity : ComponentActivity() {
+class PoiListActivity : AppCompatActivity() {
 
     private var tts: android.speech.tts.TextToSpeech? = null
     private var isTtsReady = false
     private lateinit var poiAdapter: PoiAdapter
     private lateinit var allPois: List<Route66Landmark>
+    private lateinit var clearSearchBtn: TextView
+
+    private fun color(resId: Int): Int {
+        return androidx.core.content.ContextCompat.getColor(this, resId)
+    }
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density + 0.5f).toInt()
 
@@ -43,14 +49,21 @@ class PoiListActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val darkModeEnabled = prefs.getBoolean(AppSettings.KEY_DARK_MODE, false)
+
+        AppCompatDelegate.setDefaultNightMode(
+            if (darkModeEnabled) AppCompatDelegate.MODE_NIGHT_YES
+            else AppCompatDelegate.MODE_NIGHT_NO
+        )
+
         super.onCreate(savedInstanceState)
 
         allPois = ArizonaLandmarks.landmarks
 
         poiAdapter = PoiAdapter(
             onShow = { landmark ->
-                val data = Intent()
-                    .putExtra("landmark_id", landmark.id)
+                val data = Intent().putExtra("landmark_id", landmark.id)
                 setResult(RESULT_OK, data)
                 finish()
             },
@@ -64,6 +77,7 @@ class PoiListActivity : ComponentActivity() {
                 listenToLandmark(landmark)
             }
         )
+
         tts = android.speech.tts.TextToSpeech(this) { status ->
             if (status == android.speech.tts.TextToSpeech.SUCCESS) {
                 val result = tts?.setLanguage(java.util.Locale.US)
@@ -73,9 +87,10 @@ class PoiListActivity : ComponentActivity() {
                 isTtsReady = false
             }
         }
+
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#F5F5F5"))
+            setBackgroundColor(color(R.color.surface))
             setPadding(16.dp(), 16.dp(), 16.dp(), 16.dp())
         }
 
@@ -84,36 +99,73 @@ class PoiListActivity : ComponentActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val searchBar = EditText(this).apply {
-            hint = "Search POIs..."
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = 10.dp()
+        val backBtn = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_arrow_back)
+            setColorFilter(color(R.color.text_primary))
+            background = null
+            layoutParams = LinearLayout.LayoutParams(36.dp(), 36.dp()).apply {
+                marginEnd = 8.dp()
             }
-            setSingleLine(true)
-            setPadding(12.dp(), 10.dp(), 12.dp(), 10.dp())
-            setBackgroundColor(Color.WHITE)
-
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    filterList(s?.toString().orEmpty())
-                }
-                override fun afterTextChanged(s: Editable?) {}
-            })
-        }
-
-        val backBtn = Button(this).apply {
-            text = "Back to Map"
-            setBackgroundColor(Color.parseColor("#424242"))
-            setTextColor(Color.WHITE)
+            setPadding(6.dp(), 6.dp(), 6.dp(), 6.dp())
             setOnClickListener {
                 setResult(RESULT_CANCELED)
                 finish()
             }
         }
 
-        topRow.addView(searchBar)
+        val searchContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(color(R.color.card_background))
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+            setPadding(10.dp(), 0, 10.dp(), 0)
+        }
+
+        val searchBar = EditText(this).apply {
+            hint = "Search POIs..."
+            layoutParams = LinearLayout.LayoutParams(
+                0,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                1f
+            )
+            setSingleLine(true)
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setTextColor(color(R.color.text_primary))
+            setHintTextColor(color(R.color.text_muted))
+
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                    val query = s?.toString().orEmpty()
+                    clearSearchBtn.visibility = if (query.isBlank()) View.GONE else View.VISIBLE
+                    filterList(query)
+                }
+
+                override fun afterTextChanged(s: Editable?) {}
+            })
+        }
+
+        clearSearchBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 16f
+            setTextColor(color(R.color.text_muted))
+            visibility = View.GONE
+            setPadding(12.dp(), 8.dp(), 4.dp(), 8.dp())
+            setOnClickListener {
+                searchBar.setText("")
+            }
+        }
+
+        searchContainer.addView(searchBar)
+        searchContainer.addView(clearSearchBtn)
+
         topRow.addView(backBtn)
+        topRow.addView(searchContainer)
         rootLayout.addView(topRow)
 
         rootLayout.addView(View(this).apply {
@@ -126,6 +178,7 @@ class PoiListActivity : ComponentActivity() {
         val recyclerView = RecyclerView(this).apply {
             layoutManager = LinearLayoutManager(this@PoiListActivity)
             adapter = poiAdapter
+            setBackgroundColor(color(R.color.surface))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
@@ -138,12 +191,14 @@ class PoiListActivity : ComponentActivity() {
 
         poiAdapter.submitList(allPois)
     }
+
     override fun onDestroy() {
         super.onDestroy()
         tts?.stop()
         tts?.shutdown()
         tts = null
     }
+
     private fun navigateToLandmark(landmark: Route66Landmark) {
         val lat = landmark.latitude
         val lon = landmark.longitude
@@ -267,21 +322,27 @@ private class PoiAdapter(
         val context = parent.context
         fun Int.dp(): Int = (this * context.resources.displayMetrics.density + 0.5f).toInt()
 
-        fun styleActionButton(button: Button, color: String) {
+        fun styleActionButton(button: Button, colorRes: Int) {
             button.background = androidx.core.content.ContextCompat.getDrawable(
                 context,
                 R.drawable.btn_pill
             )
             button.backgroundTintList =
-                android.content.res.ColorStateList.valueOf(Color.parseColor(color))
-            button.setTextColor(Color.WHITE)
+                android.content.res.ColorStateList.valueOf(
+                    androidx.core.content.ContextCompat.getColor(context, colorRes)
+                )
+            button.setTextColor(
+                androidx.core.content.ContextCompat.getColor(context, R.color.white)
+            )
             button.textSize = 12f
             button.isAllCaps = false
         }
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(
+                androidx.core.content.ContextCompat.getColor(context, R.color.card_background)
+            )
             layoutParams = RecyclerView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -294,21 +355,25 @@ private class PoiAdapter(
         val headerBar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.parseColor("#FF7A00"))
+            setBackgroundColor(
+                androidx.core.content.ContextCompat.getColor(context, R.color.accent_orange)
+            )
             setPadding(18.dp(), 14.dp(), 18.dp(), 14.dp())
         }
 
         val title = TextView(context).apply {
             textSize = 18f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+            setTextColor(
+                androidx.core.content.ContextCompat.getColor(context, R.color.white)
+            )
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
         val expandBtn = TextView(context).apply {
             text = "▼"
             textSize = 18f
-            setTextColor(Color.WHITE)
+            setTextColor(android.graphics.Color.WHITE)
             setPadding(16, 8, 16, 8)
         }
 
@@ -317,7 +382,9 @@ private class PoiAdapter(
 
         val descriptionText = TextView(context).apply {
             textSize = 14.5f
-            setTextColor(Color.parseColor("#333333"))
+            setTextColor(
+                androidx.core.content.ContextCompat.getColor(context, R.color.text_primary)
+            )
             setLineSpacing(6f, 1.05f)
             setPadding(18.dp(), 16.dp(), 18.dp(), 8.dp())
         }
@@ -330,17 +397,17 @@ private class PoiAdapter(
 
         val listenBtn = Button(context).apply {
             text = "🔊 Listen"
-            styleActionButton(this, "#1976D2")
+            styleActionButton(this, R.color.accent_blue)
         }
 
         val aboutBtn = Button(context).apply {
-            text = "ℹ️ About"
-            styleActionButton(this, "#7B1FA2")
+            text = "ℹ️ More"
+            styleActionButton(this, R.color.accent_purple)
         }
 
         val navigateBtn = Button(context).apply {
             text = "Navigate"
-            styleActionButton(this, "#2E7D32")
+            styleActionButton(this, R.color.accent_green)
         }
 
         fun spacer(): View {
