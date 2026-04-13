@@ -11,13 +11,18 @@ data class Route66Landmark(
     val description: String,
     val latitude: Double,
     val longitude: Double,
-    val radiusMeters: Float = 600f,  // Geofence radius in meters
+    val radiusMeters: Float = GEOFENCE_RADIUS_METERS,
     val narrative: String? = null
     ) {
     /**
      * Converts the landmark's coordinates to a Mapbox Point
      */
     fun toPoint(): Point = Point.fromLngLat(longitude, latitude)
+
+    companion object {
+        /** Same radius for every POI; large enough to intersect Route 66 while driving (max ~10 km on Android). */
+        const val GEOFENCE_RADIUS_METERS = 5000f
+    }
 }
 
 /**
@@ -32,7 +37,9 @@ object ArizonaLandmarks {
      * Initializes the landmarks list with data from the database
      */
     fun initialize(landmarks: List<Route66Landmark>) {
-        this.landmarks = landmarks
+        this.landmarks = landmarks.map { lm ->
+            lm.copy(radiusMeters = Route66Landmark.GEOFENCE_RADIUS_METERS)
+        }
     }
     
     fun findById(id: String): Route66Landmark? = landmarks.find { it.id == id }

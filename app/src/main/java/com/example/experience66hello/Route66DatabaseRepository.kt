@@ -125,7 +125,10 @@ class Route66DatabaseRepository(private val context: Context) {
         
         // Extract search terms from landmark and database entry
         val searchTerms = mutableListOf<String>()
-        searchTerms.add(landmark.name.lowercase())
+        // Apply keyword override for better CPA matching
+        val override = SearchKeywordOverrides.forPoiName(landmark.name)
+        val primaryTerm = (override?.useTerm ?: landmark.name).lowercase()
+        searchTerms.add(primaryTerm)
         searchTerms.add(landmark.id.lowercase())
         
         dbEntry?.let { entry ->

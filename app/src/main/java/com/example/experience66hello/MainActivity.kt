@@ -7,7 +7,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.ConnectivityManager
@@ -16,6 +18,8 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -36,6 +40,7 @@ import com.google.android.gms.location.LocationServices
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.ImageHolder
+import com.mapbox.common.Cancelable
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
 import com.mapbox.maps.plugin.LocationPuck2D
@@ -58,6 +63,9 @@ import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
 import com.mapbox.maps.extension.style.style
 import com.mapbox.maps.extension.style.sources.addSource
 import com.mapbox.maps.extension.style.layers.addLayer
+import com.mapbox.maps.extension.style.layers.properties.generated.IconAnchor
+import com.mapbox.maps.extension.style.layers.properties.generated.TextAnchor
+import com.mapbox.maps.extension.style.layers.properties.generated.TextJustify
 import android.text.Editable
 import android.text.TextWatcher
 
@@ -69,6 +77,10 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val TAG = "MainActivity"
+        private const val ACTION_SHOW = GeofenceBroadcastReceiver.ACTION_SHOW
+        private const val ACTION_LISTEN = GeofenceBroadcastReceiver.ACTION_LISTEN
+        private const val ACTION_MORE = GeofenceBroadcastReceiver.ACTION_MORE
+        private const val ACTION_NAVIGATE = GeofenceBroadcastReceiver.ACTION_NAVIGATE
     }
     private lateinit var mapView: MapView
     private lateinit var geofenceManager: GeofenceManager
@@ -82,9 +94,25 @@ class MainActivity : AppCompatActivity() {
     private var pendingGeofenceInit = false
     private var isStyleLoaded = false
     private var pendingMarkers = false
+    private var pendingNotificationLandmarkId: String? = null
+    private var pendingNotificationAction: String? = null
+    private var pendingNotificationTriggerToPoiMeters: Float? = null
 
     private var pointAnnotationManager: PointAnnotationManager? = null
     private var circleAnnotationManager: CircleAnnotationManager? = null
+
+    /** True when circles were drawn for all landmarks (e.g. after geofence highlight); false = subset only. */
+    private var geofenceCirclesUseFullLandmarkSet = false
+    private var geofenceCameraCancelable: Cancelable? = null
+    private val geofenceCircleRedrawHandler = Handler(Looper.getMainLooper())
+    private val geofenceCircleRedrawRunnable = Runnable {
+        redrawGeofenceCirclesForCurrentCamera()
+        refreshPoiMarkersForCameraZoomIfNeeded()
+    }
+
+    /** Last zoom bucket used for POI label text size (avoid rebuilding markers every frame). */
+    private var appliedPoiLabelZoomBucket: Int = Int.MIN_VALUE
+    private var cachedPoiMarkerBitmap: Bitmap? = null
 
     private lateinit var poisBtn: Button
     // Track which landmarks the user is currently inside
@@ -119,6 +147,10 @@ class MainActivity : AppCompatActivity() {
 
     // ID of the landmark currently being displayed
     private var currentLandmarkId: String? = null
+    // Last geofence trigger point per landmark (used to report distance from trigger)
+    private val lastTriggerPointByLandmark = mutableMapOf<String, Point>()
+    /** When true, live location updates must not overwrite trigger-to-POI distance on the card. */
+    private var distanceModeTriggerToPoi = false
     
     // Archive items matched to the current landmark (used by About button)
     private var currentLandmarkArchiveItems: List<Route66ArchiveItem> = emptyList()
@@ -167,7 +199,10 @@ class MainActivity : AppCompatActivity() {
         val landmarkId: String,
         val landmarkName: String,
         val transitionType: String,
-        val timestamp: Long
+        val timestamp: Long,
+        val triggerLat: Double? = null,
+        val triggerLng: Double? = null,
+        val triggerToPoiMeters: Float? = null
     )
 
     // Permission launcher for fine location
@@ -193,6 +228,13 @@ class MainActivity : AppCompatActivity() {
                 ).show()
                 // Still enable location but geofencing won't work in background
                 enableUserLocation()
+            }
+        }
+
+    private val requestPostNotificationsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (!granted) {
+                Log.w(TAG, "POST_NOTIFICATIONS denied; background POI notifications may be hidden")
             }
         }
     //POI List
@@ -233,12 +275,20 @@ class MainActivity : AppCompatActivity() {
     // Receiver for geofence events
     private val geofenceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val landmarkId = intent.getStringExtra("landmark_id") ?: return
-            val landmarkName = intent.getStringExtra("landmark_name") ?: "Unknown"
-            val transitionType = intent.getStringExtra("transition_type") ?: return
-            val timestamp = intent.getLongExtra("timestamp", System.currentTimeMillis())
+            val landmarkId = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_LANDMARK_ID) ?: return
+            val landmarkName = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_LANDMARK_NAME) ?: "Unknown"
+            val transitionType = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_TRANSITION_TYPE) ?: return
+            val timestamp = intent.getLongExtra(GeofenceBroadcastReceiver.EXTRA_TIMESTAMP, System.currentTimeMillis())
+            val trigLat = if (intent.hasExtra(GeofenceBroadcastReceiver.EXTRA_TRIGGER_LAT)) {
+                intent.getDoubleExtra(GeofenceBroadcastReceiver.EXTRA_TRIGGER_LAT, Double.NaN)
+            } else null
+            val trigLng = if (intent.hasExtra(GeofenceBroadcastReceiver.EXTRA_TRIGGER_LNG)) {
+                intent.getDoubleExtra(GeofenceBroadcastReceiver.EXTRA_TRIGGER_LNG, Double.NaN)
+            } else null
+            val triggerLat = trigLat?.takeIf { !it.isNaN() }
+            val triggerLng = trigLng?.takeIf { !it.isNaN() }
             
-            handleGeofenceEvent(landmarkId, landmarkName, transitionType, timestamp)
+            handleGeofenceEvent(landmarkId, landmarkName, transitionType, timestamp, triggerLat, triggerLng)
         }
     }
 
@@ -262,6 +312,7 @@ class MainActivity : AppCompatActivity() {
             else AppCompatDelegate.MODE_NIGHT_NO
         )
         super.onCreate(savedInstanceState)
+        ensureNotificationPermissionIfNeeded()
 
         //initialize TTS
         tts = TextToSpeech(this) { status ->
@@ -331,6 +382,7 @@ class MainActivity : AppCompatActivity() {
         mapView.mapboxMap.loadStyle(mapStyle) { style ->
             isStyleLoaded = true
             setupAnnotationManagers()
+            registerGeofenceCircleCameraListener()
 
             // ===== ROUTE 66 LINE =====
 
@@ -385,6 +437,14 @@ class MainActivity : AppCompatActivity() {
             archiveRepository.loadArchiveData()
             Log.d(TAG, "Archive data preloaded")
         }.start()
+
+        handleNotificationIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
     }
     /**
      * New user onboarding overlay
@@ -613,6 +673,8 @@ class MainActivity : AppCompatActivity() {
                         pendingGeofenceInit = false
                         initializeGeofencing()
                     }
+
+                    tryProcessPendingNotificationAction()
                     Log.d(TAG, "Loaded ${landmarks.size} landmarks from Route 66 Database")
                     
                     Toast.makeText(
@@ -1427,7 +1489,11 @@ class MainActivity : AppCompatActivity() {
             }
             sb.append("[$timeStr] $emoji\n")
             sb.append("  → ${event.landmarkName}\n")
-            sb.append("  ID: ${event.landmarkId}\n\n")
+            sb.append("  ID: ${event.landmarkId}\n")
+            if (event.triggerToPoiMeters != null) {
+                sb.append("  📐 Trigger → POI: ${formatDistance(event.triggerToPoiMeters)}\n")
+            }
+            sb.append("\n")
         }
         
         eventLogTextView.text = sb.toString()
@@ -1457,99 +1523,201 @@ class MainActivity : AppCompatActivity() {
             //    startNavigationTo(annotation.point)
             //    true // tell Mapbox we handled the click
             }
+            // Pins stay visible; labels participate in collision so overlapping names drop when zoomed out (similar to Google Maps).
+            iconAllowOverlap = true
+            textOptional = true
+            textAllowOverlap = false
         }
 
         // Geofence circles
         circleAnnotationManager = annotationPlugin.createCircleAnnotationManager()
     }
 
+    private fun registerGeofenceCircleCameraListener() {
+        geofenceCameraCancelable?.cancel()
+        geofenceCameraCancelable = mapView.mapboxMap.subscribeCameraChanged {
+            scheduleGeofenceCircleRedraw()
+        }
+    }
+
+    private fun scheduleGeofenceCircleRedraw() {
+        geofenceCircleRedrawHandler.removeCallbacks(geofenceCircleRedrawRunnable)
+        geofenceCircleRedrawHandler.postDelayed(geofenceCircleRedrawRunnable, 100L)
+    }
 
     /**
-     * Add markers for all Route 66 landmarks (limit to prevent UI freeze)
+     * Mapbox circle annotations use screen pixels; convert geofence meters using current zoom and latitude
+     * so the disk matches real-world radius on the map.
+     */
+    private fun geofenceRadiusToScreenPixels(latitude: Double, radiusMeters: Float): Double {
+        val map = mapView.mapboxMap
+        val zoom = map.cameraState.zoom
+        val metersPerPixel = map.getMetersPerPixelAtLatitude(latitude, zoom)
+        if (metersPerPixel <= 1e-9) return 2.0
+        return (radiusMeters / metersPerPixel).toDouble().coerceAtLeast(2.0)
+    }
+
+    private fun landmarksForGeofenceSubset(): List<Route66Landmark> {
+        val arizonaLandmarks = ArizonaLandmarks.landmarks.filter { landmark ->
+            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-109.0
+        }
+        return if (arizonaLandmarks.size > 200) arizonaLandmarks.take(200) else arizonaLandmarks
+    }
+
+    private fun drawGeofenceCircleAnnotation(landmark: Route66Landmark, applyActiveHighlight: Boolean) {
+        val isActive = applyActiveHighlight && activeLandmarks.contains(landmark.id)
+        val color = if (isActive) "#4CAF50" else "#4A90D9"
+        val opacity = if (isActive) 0.4 else 0.25
+        val strokeW = if (isActive) 3.0 else 2.0
+        val strokeC = if (isActive) "#2E7D32" else "#2E5A8B"
+        val radiusPx = geofenceRadiusToScreenPixels(landmark.latitude, landmark.radiusMeters)
+        val circleOptions = CircleAnnotationOptions()
+            .withPoint(landmark.toPoint())
+            .withCircleRadius(radiusPx)
+            .withCircleColor(color)
+            .withCircleOpacity(opacity)
+            .withCircleStrokeWidth(strokeW)
+            .withCircleStrokeColor(strokeC)
+        circleAnnotationManager?.create(circleOptions)
+    }
+
+    private fun redrawGeofenceCirclesWithHighlightState() {
+        circleAnnotationManager?.deleteAll()
+        ArizonaLandmarks.landmarks.forEach { lm ->
+            drawGeofenceCircleAnnotation(lm, applyActiveHighlight = true)
+        }
+    }
+
+    private fun redrawGeofenceCirclesForCurrentCamera() {
+        if (!isStyleLoaded || circleAnnotationManager == null) return
+        if (ArizonaLandmarks.landmarks.isEmpty()) return
+        if (geofenceCirclesUseFullLandmarkSet) {
+            redrawGeofenceCirclesWithHighlightState()
+        } else {
+            circleAnnotationManager?.deleteAll()
+            landmarksForGeofenceSubset().forEach { lm ->
+                drawGeofenceCircleAnnotation(lm, applyActiveHighlight = false)
+            }
+        }
+    }
+
+    private fun getPoiMarkerBitmap(): Bitmap {
+        cachedPoiMarkerBitmap?.let { return it }
+        val drawable = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.red_marker)
+        val bitmap = if (drawable != null) {
+            val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: 48
+            val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: 72
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { b ->
+                val canvas = Canvas(b)
+                drawable.setBounds(0, 0, canvas.width, canvas.height)
+                drawable.draw(canvas)
+            }
+        } else {
+            Bitmap.createBitmap(24, 36, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+        }
+        cachedPoiMarkerBitmap = bitmap
+        return bitmap
+    }
+
+    /** Discrete zoom bands so label size updates when zoom changes (Google Maps–style). */
+    private fun poiLabelZoomBucket(zoom: Double): Int = when {
+        zoom < 7.5 -> 0
+        zoom < 9.0 -> 1
+        zoom < 10.5 -> 2
+        zoom < 12.5 -> 3
+        zoom < 15.0 -> 4
+        else -> 5
+    }
+
+    private fun poiLabelTextSizeForBucket(bucket: Int): Double = when (bucket) {
+        0 -> 11.0
+        1 -> 12.5
+        2 -> 14.0
+        3 -> 16.5
+        4 -> 19.0
+        else -> 22.0
+    }
+
+    private fun buildPoiPointAnnotationOptions(
+        landmark: Route66Landmark,
+        markerBitmap: Bitmap,
+        textSize: Double
+    ): PointAnnotationOptions {
+        val maxHalo = (textSize / 4.0 - 0.15).coerceAtLeast(2.0)
+        val haloW = (textSize / 16.0 * 2.4).coerceIn(2.0, maxHalo)
+        return PointAnnotationOptions()
+            .withPoint(landmark.toPoint())
+            .withIconImage(markerBitmap)
+            .withIconAnchor(IconAnchor.BOTTOM)
+            .withTextField(landmark.name)
+            .withTextAnchor(TextAnchor.TOP)
+            .withTextOffset(listOf(0.0, 0.35))
+            .withTextSize(textSize)
+            .withTextColor("#FFFFFF")
+            .withTextHaloColor("rgba(0,0,0,0.82)")
+            .withTextHaloWidth(haloW)
+            .withTextHaloBlur(0.35)
+            .withTextMaxWidth(14.0)
+            .withTextLineHeight(1.2)
+            .withTextJustify(TextJustify.CENTER)
+    }
+
+    private fun rebuildPoiPointAnnotations(textSize: Double) {
+        val mgr = pointAnnotationManager ?: return
+        val markerBitmap = getPoiMarkerBitmap()
+        mgr.deleteAll()
+        landmarkByAnnotationId.clear()
+        val landmarksToShow = landmarksForGeofenceSubset()
+        landmarksToShow.forEach { landmark ->
+            val markerOptions = buildPoiPointAnnotationOptions(landmark, markerBitmap, textSize)
+            val annotation = mgr.create(markerOptions)
+            if (annotation != null) {
+                landmarkByAnnotationId[annotation.id] = landmark
+            }
+        }
+    }
+
+    private fun refreshPoiMarkersForCameraZoomIfNeeded() {
+        if (!isStyleLoaded || pointAnnotationManager == null) return
+        if (ArizonaLandmarks.landmarks.isEmpty()) return
+        val bucket = poiLabelZoomBucket(mapView.mapboxMap.cameraState.zoom)
+        if (bucket == appliedPoiLabelZoomBucket) return
+        appliedPoiLabelZoomBucket = bucket
+        rebuildPoiPointAnnotations(poiLabelTextSizeForBucket(bucket))
+    }
+
+    /**
+     * Add markers for all Route 66 landmarks (limit to prevent UI freeze).
+     * Label size follows map zoom; collision hiding reduces clutter when zoomed out.
      */
     private fun addAllLandmarkMarkers() {
         if (ArizonaLandmarks.landmarks.isEmpty()) {
             Log.w(TAG, "No landmarks to display")
             return
         }
-        
-        // Limit markers to prevent UI freeze with thousands of POIs
-        // Filter to Arizona landmarks first, then limit total
-        val arizonaLandmarks = ArizonaLandmarks.landmarks.filter { landmark ->
-            // Filter to Arizona (latitude 31-37, longitude -115 to -109)
-            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-109.0
+        val bucket = poiLabelZoomBucket(mapView.mapboxMap.cameraState.zoom)
+        appliedPoiLabelZoomBucket = bucket
+        val totalAz = ArizonaLandmarks.landmarks.count {
+            it.latitude in 31.0..37.0 && it.longitude in -115.0..-109.0
         }
-        
-        val maxMarkers = 200 // Limit to 200 markers to prevent UI freeze
-        val landmarksToShow = if (arizonaLandmarks.size > maxMarkers) {
-            Log.w(TAG, "Too many landmarks (${arizonaLandmarks.size}), showing first $maxMarkers")
-            arizonaLandmarks.take(maxMarkers)
-        } else {
-            arizonaLandmarks
+        if (totalAz > 200) {
+            Log.w(TAG, "Too many landmarks ($totalAz), showing first 200 markers")
         }
-        
-        // Convert vector drawable to bitmap
-        val drawable = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.red_marker)
-        val markerBitmap = if (drawable != null) {
-            val bitmap = android.graphics.Bitmap.createBitmap(
-                drawable.intrinsicWidth.takeIf { it > 0 } ?: 48,
-                drawable.intrinsicHeight.takeIf { it > 0 } ?: 72,
-                android.graphics.Bitmap.Config.ARGB_8888
-            )
-            val canvas = android.graphics.Canvas(bitmap)
-            drawable.setBounds(0, 0, canvas.width, canvas.height)
-            drawable.draw(canvas)
-            bitmap
-        } else {
-            // Fallback: create a simple colored bitmap
-            android.graphics.Bitmap.createBitmap(24, 36, android.graphics.Bitmap.Config.ARGB_8888).apply {
-                eraseColor(Color.RED)
-            }
-        }
-        
-        landmarksToShow.forEach { landmark ->
-            val markerOptions = PointAnnotationOptions()
-                .withPoint(landmark.toPoint())
-                .withIconImage(markerBitmap)
-                .withTextField(landmark.name)
-                .withTextOffset(listOf(0.0, 2.0))
-                .withTextSize(10.0)
-
-            val annotation = pointAnnotationManager?.create(markerOptions)
-            if (annotation != null) {
-                landmarkByAnnotationId[annotation.id] = landmark
-            }
-        }
-        
-        Log.d(TAG, "Added ${landmarksToShow.size} landmark markers (out of ${ArizonaLandmarks.landmarks.size} total)")
+        rebuildPoiPointAnnotations(poiLabelTextSizeForBucket(bucket))
+        val n = landmarksForGeofenceSubset().size
+        Log.d(TAG, "Added $n landmark markers (out of ${ArizonaLandmarks.landmarks.size} total)")
     }
 
     /**
-     * Draw geofence radius circles around all landmarks (limited to prevent UI freeze)
+     * Draw geofence radius circles around all landmarks (limited to prevent UI freeze).
+     * Radius in pixels follows map zoom so on-screen size matches [Route66Landmark.radiusMeters].
      */
     private fun drawAllGeofenceCircles() {
         if (ArizonaLandmarks.landmarks.isEmpty()) return
-        
-        // Limit circles to same landmarks as markers
-        val arizonaLandmarks = ArizonaLandmarks.landmarks.filter { landmark ->
-            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-109.0
-        }
-        val landmarksToShow = if (arizonaLandmarks.size > 200) {
-            arizonaLandmarks.take(200)
-        } else {
-            arizonaLandmarks
-        }
-        
-        landmarksToShow.forEach { landmark ->
-            val circleOptions = CircleAnnotationOptions()
-                .withPoint(landmark.toPoint())
-                .withCircleRadius((landmark.radiusMeters / 10).toDouble()) // Visual scaling
-                .withCircleColor("#4A90D9") // Blue
-                .withCircleOpacity(0.25)
-                .withCircleStrokeWidth(2.0)
-                .withCircleStrokeColor("#2E5A8B")
-            
-            circleAnnotationManager?.create(circleOptions)
+        geofenceCirclesUseFullLandmarkSet = false
+        circleAnnotationManager?.deleteAll()
+        landmarksForGeofenceSubset().forEach { landmark ->
+            drawGeofenceCircleAnnotation(landmark, applyActiveHighlight = false)
         }
     }
 
@@ -1712,6 +1880,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateDistanceForCurrentLandmark(userPoint: Point) {
+        if (distanceModeTriggerToPoi) return
         val landmarkId = currentLandmarkId ?: return
         val landmark = route66DatabaseRepository.findLandmarkById(landmarkId)
             ?: ArizonaLandmarks.findById(landmarkId)
@@ -1781,17 +1950,52 @@ class MainActivity : AppCompatActivity() {
         landmarkId: String,
         landmarkName: String,
         transitionType: String,
-        timestamp: Long
+        timestamp: Long,
+        triggerLat: Double?,
+        triggerLng: Double?
     ) {
-        val event = GeofenceEvent(landmarkId, landmarkName, transitionType, timestamp)
+        val lmForDistance = route66DatabaseRepository.findLandmarkById(landmarkId)
+            ?: ArizonaLandmarks.findById(landmarkId)
+        val triggerToPoiMeters = if (
+            transitionType == "ENTER" &&
+            lmForDistance != null &&
+            triggerLat != null &&
+            triggerLng != null
+        ) {
+            val results = FloatArray(1)
+            Location.distanceBetween(
+                triggerLat,
+                triggerLng,
+                lmForDistance.latitude,
+                lmForDistance.longitude,
+                results
+            )
+            results[0]
+        } else null
+
+        val event = GeofenceEvent(
+            landmarkId,
+            landmarkName,
+            transitionType,
+            timestamp,
+            triggerLat,
+            triggerLng,
+            triggerToPoiMeters
+        )
         geofenceEventLog.add(event)
         
         when (transitionType) {
             "ENTER" -> {
                 activeLandmarks.add(landmarkId)
+                if (triggerLat != null && triggerLng != null) {
+                    lastTriggerPointByLandmark[landmarkId] = Point.fromLngLat(triggerLng, triggerLat)
+                }
                 highlightLandmark(landmarkId, true)
                 showEntryNotification(landmarkName)
-                showLandmarkCard(landmarkId)
+                showLandmarkCard(landmarkId, triggerToPoiMeters)
+                if (triggerToPoiMeters != null) {
+                    readCurrentLandmark()
+                }
             }
             "EXIT" -> {
                 activeLandmarks.remove(landmarkId)
@@ -1800,7 +2004,6 @@ class MainActivity : AppCompatActivity() {
             }
             "DWELL" -> {
                 showDwellNotification(landmarkName)
-
             }
         }
         
@@ -1815,24 +2018,8 @@ class MainActivity : AppCompatActivity() {
      * Highlight or unhighlight a landmark's geofence circle
      */
     private fun highlightLandmark(landmarkId: String, highlight: Boolean) {
-        // Remove existing circles and redraw with new colors
-        circleAnnotationManager?.deleteAll()
-        
-        ArizonaLandmarks.landmarks.forEach { lm ->
-            val isActive = activeLandmarks.contains(lm.id)
-            val color = if (isActive) "#4CAF50" else "#4A90D9" // Green if active, blue otherwise
-            val opacity = if (isActive) 0.4 else 0.25
-            
-            val circleOptions = CircleAnnotationOptions()
-                .withPoint(lm.toPoint())
-                .withCircleRadius((lm.radiusMeters / 10).toDouble())
-                .withCircleColor(color)
-                .withCircleOpacity(opacity)
-                .withCircleStrokeWidth(if (isActive) 3.0 else 2.0)
-                .withCircleStrokeColor(if (isActive) "#2E7D32" else "#2E5A8B")
-            
-            circleAnnotationManager?.create(circleOptions)
-        }
+        geofenceCirclesUseFullLandmarkSet = true
+        redrawGeofenceCirclesWithHighlightState()
     }
 
     private fun showEntryNotification(landmarkName: String) {
@@ -1897,6 +2084,52 @@ class MainActivity : AppCompatActivity() {
             val browserIntent = Intent(Intent.ACTION_VIEW, browserUri)
             startActivity(browserIntent)
         }
+    }
+
+    private fun ensureNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        requestPostNotificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        if (intent == null) return
+        val landmarkId = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_LANDMARK_ID) ?: return
+        val action = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_NOTIFICATION_ACTION) ?: ACTION_SHOW
+        val triggerToPoiMeters = if (intent.hasExtra(GeofenceBroadcastReceiver.EXTRA_TRIGGER_TO_POI_METERS)) {
+            intent.getFloatExtra(GeofenceBroadcastReceiver.EXTRA_TRIGGER_TO_POI_METERS, Float.NaN)
+                .takeIf { !it.isNaN() }
+        } else null
+
+        pendingNotificationLandmarkId = landmarkId
+        pendingNotificationAction = action
+        pendingNotificationTriggerToPoiMeters = triggerToPoiMeters
+        tryProcessPendingNotificationAction()
+    }
+
+    private fun tryProcessPendingNotificationAction() {
+        val landmarkId = pendingNotificationLandmarkId ?: return
+        val action = pendingNotificationAction ?: ACTION_SHOW
+
+        val landmark = route66DatabaseRepository.findLandmarkById(landmarkId)
+            ?: ArizonaLandmarks.findById(landmarkId)
+            ?: return // Landmarks not loaded yet; retry after DB init.
+
+        showLandmarkCard(landmarkId, pendingNotificationTriggerToPoiMeters)
+        when (action) {
+            ACTION_LISTEN -> readCurrentLandmark()
+            ACTION_MORE -> openAboutForCurrentLandmark()
+            ACTION_NAVIGATE -> startNavigationTo(landmark.toPoint())
+            else -> Unit
+        }
+
+        pendingNotificationLandmarkId = null
+        pendingNotificationAction = null
+        pendingNotificationTriggerToPoiMeters = null
     }
     /**
      * Bottom card that shows POI details and has a "Listen" button
@@ -2051,8 +2284,9 @@ class MainActivity : AppCompatActivity() {
     /**
      * Show details for the given landmark ID and read it aloud.
      */
-    private fun showLandmarkCard(landmarkId: String) {
+    private fun showLandmarkCard(landmarkId: String, triggerToPoiDistanceMeters: Float? = null) {
         currentLandmarkId = landmarkId
+        distanceModeTriggerToPoi = triggerToPoiDistanceMeters != null
 
         // Try to get cached offline data first
         val cached = offlineDataCache
@@ -2079,19 +2313,25 @@ class MainActivity : AppCompatActivity() {
         detailImageView.setImageResource(resolveLandmarkImageRes(landmarkId))
         detailDescriptionText.text = description
         detailExtraText.text = extra
-        detailDistanceText.text = "Distance unavailable. Waiting for your current location."
-        detailDistanceText.visibility = View.VISIBLE
-
-        detailCard.visibility = View.VISIBLE
 
         //save where to navigate
         val lm = route66DatabaseRepository.findLandmarkById(landmarkId)
             ?: ArizonaLandmarks.findById(landmarkId)
         currentDestinationPoint = lm?.toPoint()
 
-        if (lm != null) {
-            updateDistanceFromLastKnownLocation(lm)
+        if (triggerToPoiDistanceMeters != null) {
+            detailDistanceText.text =
+                "Distance from trigger point to POI: ${formatDistance(triggerToPoiDistanceMeters)}"
+            detailDistanceText.visibility = View.VISIBLE
+        } else {
+            detailDistanceText.text = "Distance unavailable. Waiting for your current location."
+            detailDistanceText.visibility = View.VISIBLE
+            if (lm != null) {
+                updateDistanceFromLastKnownLocation(lm)
+            }
         }
+
+        detailCard.visibility = View.VISIBLE
         
         // Find and store archive items for this landmark (for About button)
         if (lm != null) {
@@ -2117,6 +2357,7 @@ class MainActivity : AppCompatActivity() {
         detailCard.visibility = View.GONE
         detailDistanceText.visibility = View.GONE
         currentLandmarkId = null
+        distanceModeTriggerToPoi = false
         tts?.stop()
     }
 
@@ -2138,6 +2379,19 @@ class MainActivity : AppCompatActivity() {
             append(description)
             if (extra.isNotBlank()) {
                 append(". ").append(extra)
+            }
+            val distanceLine = detailDistanceText.text?.toString().orEmpty()
+            if (distanceLine.isNotBlank()) {
+                // Speak the distance after the description
+                val clean = distanceLine
+                    .replace("Distance from POI:", "Distance from point of interest is")
+                    .replace("Distance from trigger:", "Distance from trigger point is")
+                    .replace(
+                        "Distance from trigger point to POI:",
+                        "Distance from trigger point to the point of interest is"
+                    )
+                    .trim()
+                append(". ").append(clean)
             }
         }
 
@@ -2207,22 +2461,37 @@ class MainActivity : AppCompatActivity() {
                 
                 runOnUiThread {
                     if (archiveItems.isEmpty()) {
-                        // Fallback: open CONTENTdm search page
+                        // Fallback: open CONTENTdm search page with keyword overrides
                         val contentDmBaseUrl = "http://cdm16748.contentdm.oclc.org"
                         val collectionUrl = "$contentDmBaseUrl/digital/collection/cpa"
-                        val searchQuery = landmark.name.replace(" ", "+").replace("'", "%27")
+                        val override = SearchKeywordOverrides.forPoiName(landmark.name)
+                        val baseTerm = (override?.useTerm ?: landmark.name).trim()
+                        // Bias images-only requests by appending "photograph"
+                        val effectiveTerm = if (override?.imagesOnly == true) {
+                            "$baseTerm photograph"
+                        } else baseTerm
+                        val searchQuery = effectiveTerm.replace(" ", "+").replace("'", "%27")
                         val searchUrl = "$collectionUrl/search/searchterm/$searchQuery"
                         
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(searchUrl))
-                        try {
-                            startActivity(intent)
+                        val disabled = override?.disableFallback == true
+                        if (disabled) {
                             Toast.makeText(
                                 this,
-                                "Opening CONTENTdm search for ${landmark.name}",
+                                "No relevant CPA results configured for this entry.",
                                 Toast.LENGTH_SHORT
                             ).show()
-                        } catch (e: Exception) {
-                            Toast.makeText(this, "Cannot open CONTENTdm: ${e.message}", Toast.LENGTH_LONG).show()
+                        } else {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(searchUrl))
+                            try {
+                                startActivity(intent)
+                                Toast.makeText(
+                                    this,
+                                    "Opening CPA search for $baseTerm",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(this, "Cannot open CONTENTdm: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
                         }
                     } else {
                         // Store matched items
@@ -2305,6 +2574,7 @@ class MainActivity : AppCompatActivity() {
             ║ Landmark: ${event.landmarkName}
             ║ ID: ${event.landmarkId}
             ║ Time: $timeStr
+            ║ Trigger→POI: ${event.triggerToPoiMeters?.let { formatDistance(it) } ?: "—"}
             ╚══════════════════════════════════════
         """.trimIndent())
     }
@@ -2347,6 +2617,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+
+        geofenceCameraCancelable?.cancel()
+        geofenceCameraCancelable = null
+        geofenceCircleRedrawHandler.removeCallbacks(geofenceCircleRedrawRunnable)
 
         try { unregisterReceiver(geofenceReceiver) } catch (_: Exception) {}
         try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
