@@ -48,7 +48,7 @@ data class Route66DatabaseEntry(
             description = landmarkDescription,
             latitude = latitude,
             longitude = longitude,
-            radiusMeters = 600f, // Default radius as specified
+            radiusMeters = Route66Landmark.GEOFENCE_RADIUS_METERS,
         )
     }
     
