@@ -2293,26 +2293,15 @@ class MainActivity : AppCompatActivity() {
      * Start navigation to a landmark
      */
     private fun startNavigationTo(destination: Point) {
-        val lat = destination.latitude()
-        val lon = destination.longitude()
+        val destinationName = detailTitleText.text?.toString()
+            ?.takeIf { it.isNotBlank() }
+            ?: "Destination"
 
-        // Try Google Maps navigation app first
-        val gmmIntentUri = Uri.parse("google.navigation:q=$lat,$lon&mode=d")
-        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
-            setPackage("com.google.android.apps.maps")
-        }
-
-        if (mapIntent.resolveActivity(packageManager) != null) {
-            // Google Maps app is installed
-            startActivity(mapIntent)
-        } else {
-            // Fallback to browser directions if app is not installed
-            val browserUri = Uri.parse(
-                "https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving"
-            )
-            val browserIntent = Intent(Intent.ACTION_VIEW, browserUri)
-            startActivity(browserIntent)
-        }
+        NavigationHelper.startNavigation(
+            context = this,
+            destination = destination,
+            destinationName = destinationName
+        )
     }
 
     private fun ensureNotificationPermissionIfNeeded() {
