@@ -31,10 +31,14 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
+import kotlin.math.roundToInt
 
 class RoutePreviewActivity : AppCompatActivity() {
 
     companion object {
+        const val EXTRA_ORIGIN_LAT = "origin_lat"
+        const val EXTRA_ORIGIN_LON = "origin_lon"
         const val EXTRA_DESTINATION_LAT = "destination_lat"
         const val EXTRA_DESTINATION_LON = "destination_lon"
         const val EXTRA_DESTINATION_NAME = "destination_name"
@@ -46,6 +50,8 @@ class RoutePreviewActivity : AppCompatActivity() {
 
     private lateinit var mapView: MapView
     private lateinit var destinationNameText: TextView
+    private lateinit var routeDistanceText: TextView
+    private lateinit var routeEtaText: TextView
     private lateinit var buttonOpenGoogleMaps: Button
 
     private val fusedLocationClient by lazy {
@@ -80,6 +86,8 @@ class RoutePreviewActivity : AppCompatActivity() {
 
         mapView = findViewById(R.id.mapViewRoutePreview)
         destinationNameText = findViewById(R.id.textDestinationName)
+        routeDistanceText = findViewById(R.id.textRouteDistance)
+        routeEtaText = findViewById(R.id.textRouteEta)
         buttonOpenGoogleMaps = findViewById(R.id.buttonOpenGoogleMaps)
 
         val buttonBack = findViewById<ImageButton>(R.id.buttonBack)
@@ -90,6 +98,8 @@ class RoutePreviewActivity : AppCompatActivity() {
             .ifBlank { "Destination" }
 
         destinationNameText.text = destinationName
+        routeDistanceText.text = "Distance: --"
+        routeEtaText.text = "ETA: --"
 
         buttonOpenGoogleMaps.setOnClickListener {
             if (destination != null) {
@@ -117,6 +127,19 @@ class RoutePreviewActivity : AppCompatActivity() {
         if (destination == null) {
             Toast.makeText(this, "No destination provided", Toast.LENGTH_LONG).show()
             finish()
+            return
+        }
+
+        val passedOrigin = getOriginPointFromIntent()
+        if (passedOrigin != null) {
+            mapView.mapboxMap.setCamera(
+                CameraOptions.Builder()
+                    .center(passedOrigin)
+                    .zoom(12.0)
+                    .build()
+            )
+
+            fetchAndDrawRoute(passedOrigin, destination)
             return
         }
 
@@ -159,10 +182,14 @@ class RoutePreviewActivity : AppCompatActivity() {
 
     private fun fetchAndDrawRoute(origin: Point, destination: Point) {
         Thread {
-            val geometry = fetchRouteGeometry(origin, destination)
+            val routeResult = RouteDirectionsHelper.fetchRouteData(
+                accessToken = getString(R.string.mapbox_access_token),
+                origin = origin,
+                destination = destination
+            )
 
             runOnUiThread {
-                if (geometry.isNullOrBlank()) {
+                if (routeResult == null || routeResult.geometry.isBlank()) {
                     Toast.makeText(
                         this,
                         "Could not load route preview",
@@ -179,62 +206,25 @@ class RoutePreviewActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
 
-                drawRouteGeometry(geometry, origin, destination)
+                routeDistanceText.text =
+                    "Distance: ${RouteDirectionsHelper.formatMiles(routeResult.distanceMeters)}"
+                routeEtaText.text =
+                    "ETA: ${RouteDirectionsHelper.formatDuration(routeResult.durationSeconds)}"
+
+                drawRouteGeometry(routeResult.geometry, origin, destination)
             }
         }.start()
-    }
-
-    private fun fetchRouteGeometry(origin: Point, destination: Point): String? {
-        val accessToken = getString(R.string.mapbox_access_token)
-
-        val urlString =
-            "https://api.mapbox.com/directions/v5/mapbox/driving/" +
-                    "${origin.longitude()},${origin.latitude()};" +
-                    "${destination.longitude()},${destination.latitude()}" +
-                    "?geometries=polyline6&overview=full&access_token=$accessToken"
-
-        var connection: HttpURLConnection? = null
-
-        return try {
-            val url = URL(urlString)
-            connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 15000
-                readTimeout = 15000
-            }
-
-            val stream = if (connection.responseCode in 200..299) {
-                connection.inputStream
-            } else {
-                connection.errorStream
-            } ?: return null
-
-            val response = BufferedReader(InputStreamReader(stream)).use { reader ->
-                reader.readText()
-            }
-
-            if (connection.responseCode !in 200..299) {
-                Log.e(TAG, "Directions API error: $response")
-                return null
-            }
-
-            val json = JSONObject(response)
-            val routes = json.optJSONArray("routes") ?: return null
-            if (routes.length() == 0) return null
-
-            routes.getJSONObject(0).optString("geometry", null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch route", e)
-            null
-        } finally {
-            connection?.disconnect()
-        }
     }
 
     private fun drawRouteGeometry(polyline6: String, origin: Point, destination: Point) {
         val lineString = LineString.fromPolyline(polyline6, 6)
 
         mapView.mapboxMap.getStyle()?.let { style ->
+            if (style.styleSourceExists(ROUTE_SOURCE_ID)) {
+                style.removeStyleLayer(ROUTE_LAYER_ID)
+                style.removeStyleSource(ROUTE_SOURCE_ID)
+            }
+
             style.addSource(
                 geoJsonSource(ROUTE_SOURCE_ID) {
                     feature(Feature.fromGeometry(lineString))
@@ -266,6 +256,16 @@ class RoutePreviewActivity : AppCompatActivity() {
         mapView.mapboxMap.setCamera(camera)
     }
 
+    private fun getOriginPointFromIntent(): Point? {
+        if (!intent.hasExtra(EXTRA_ORIGIN_LAT) || !intent.hasExtra(EXTRA_ORIGIN_LON)) {
+            return null
+        }
+
+        val lat = intent.getDoubleExtra(EXTRA_ORIGIN_LAT, 0.0)
+        val lon = intent.getDoubleExtra(EXTRA_ORIGIN_LON, 0.0)
+        return Point.fromLngLat(lon, lat)
+    }
+
     private fun getDestinationPoint(): Point? {
         if (!intent.hasExtra(EXTRA_DESTINATION_LAT) || !intent.hasExtra(EXTRA_DESTINATION_LON)) {
             return null
@@ -275,4 +275,5 @@ class RoutePreviewActivity : AppCompatActivity() {
         val lon = intent.getDoubleExtra(EXTRA_DESTINATION_LON, 0.0)
         return Point.fromLngLat(lon, lat)
     }
+
 }
