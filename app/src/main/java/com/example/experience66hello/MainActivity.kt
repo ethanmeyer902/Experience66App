@@ -147,6 +147,7 @@ class MainActivity : AppCompatActivity() {
     
     // Current navigation destination point
     private var currentDestinationPoint: Point? = null
+    private var latestUserPoint: Point? = null
 
     // ID of the landmark currently being displayed
     private var currentLandmarkId: String? = null
@@ -171,6 +172,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var topContainer: LinearLayout
     private lateinit var searchClearBtn: TextView
     private val liveDistanceListener = OnIndicatorPositionChangedListener { point ->
+        latestUserPoint = point
         updateDistanceForCurrentLandmark(point)
     }
 
@@ -2110,23 +2112,39 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateDistanceForCurrentLandmark(userPoint: Point) {
         if (distanceModeTriggerToPoi) return
+
         val landmarkId = currentLandmarkId ?: return
         val landmark = route66DatabaseRepository.findLandmarkById(landmarkId)
             ?: ArizonaLandmarks.findById(landmarkId)
             ?: return
 
-        val results = FloatArray(1)
-        Location.distanceBetween(
-            userPoint.latitude(),
-            userPoint.longitude(),
-            landmark.latitude,
-            landmark.longitude,
-            results
-        )
+        val destination = Point.fromLngLat(landmark.longitude, landmark.latitude)
 
-        val distanceMeters = results[0]
-        detailDistanceText.text = "Distance from POI: ${formatDistance(distanceMeters)}"
+        detailDistanceText.text = "Distance from POI: Loading..."
         detailDistanceText.visibility = View.VISIBLE
+
+        Thread {
+            val routeData = RouteDirectionsHelper.fetchRouteData(
+                accessToken = getString(R.string.mapbox_access_token),
+                origin = userPoint,
+                destination = destination
+            )
+
+            runOnUiThread {
+                if (currentLandmarkId != landmarkId || distanceModeTriggerToPoi) {
+                    return@runOnUiThread
+                }
+
+                if (routeData != null) {
+                    detailDistanceText.text =
+                        "Distance from POI: ${RouteDirectionsHelper.formatMiles(routeData.distanceMeters)}"
+                } else {
+                    detailDistanceText.text = "Distance unavailable right now."
+                }
+
+                detailDistanceText.visibility = View.VISIBLE
+            }
+        }.start()
     }
 
     private fun updateDistanceFromLastKnownLocation(landmark: Route66Landmark) {
@@ -2141,19 +2159,38 @@ class MainActivity : AppCompatActivity() {
         fusedLocationClient.lastLocation
             .addOnSuccessListener { location ->
                 if (location != null) {
-                    val results = FloatArray(1)
-                    Location.distanceBetween(
-                        location.latitude,
-                        location.longitude,
-                        landmark.latitude,
-                        landmark.longitude,
-                        results
-                    )
-                    detailDistanceText.text = "Distance from POI: ${formatDistance(results[0])}"
+                    val origin = Point.fromLngLat(location.longitude, location.latitude)
+                    val destination = Point.fromLngLat(landmark.longitude, landmark.latitude)
+
+                    detailDistanceText.text = "Distance from POI: Loading..."
+                    detailDistanceText.visibility = View.VISIBLE
+
+                    Thread {
+                        val routeData = RouteDirectionsHelper.fetchRouteData(
+                            accessToken = getString(R.string.mapbox_access_token),
+                            origin = origin,
+                            destination = destination
+                        )
+
+                        runOnUiThread {
+                            if (currentLandmarkId != landmark.id || distanceModeTriggerToPoi) {
+                                return@runOnUiThread
+                            }
+
+                            if (routeData != null) {
+                                detailDistanceText.text =
+                                    "Distance from POI: ${RouteDirectionsHelper.formatMiles(routeData.distanceMeters)}"
+                            } else {
+                                detailDistanceText.text = "Distance unavailable right now."
+                            }
+
+                            detailDistanceText.visibility = View.VISIBLE
+                        }
+                    }.start()
                 } else {
                     detailDistanceText.text = "Distance unavailable. Waiting for your current location."
+                    detailDistanceText.visibility = View.VISIBLE
                 }
-                detailDistanceText.visibility = View.VISIBLE
             }
             .addOnFailureListener {
                 detailDistanceText.text = "Distance unavailable right now."
@@ -2297,11 +2334,29 @@ class MainActivity : AppCompatActivity() {
             ?.takeIf { it.isNotBlank() }
             ?: "Destination"
 
-        NavigationHelper.startNavigation(
-            context = this,
-            destination = destination,
-            destinationName = destinationName
+        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val mode = prefs.getString(
+            AppSettings.KEY_NAVIGATION_MODE,
+            AppSettings.VALUE_NAVIGATION_IN_APP
         )
+
+        if (mode == AppSettings.VALUE_NAVIGATION_GOOGLE_MAPS) {
+            NavigationHelper.openGoogleMaps(this, destination)
+            return
+        }
+
+        val intent = Intent(this, RoutePreviewActivity::class.java).apply {
+            putExtra(RoutePreviewActivity.EXTRA_DESTINATION_LAT, destination.latitude())
+            putExtra(RoutePreviewActivity.EXTRA_DESTINATION_LON, destination.longitude())
+            putExtra(RoutePreviewActivity.EXTRA_DESTINATION_NAME, destinationName)
+
+            latestUserPoint?.let { origin ->
+                putExtra(RoutePreviewActivity.EXTRA_ORIGIN_LAT, origin.latitude())
+                putExtra(RoutePreviewActivity.EXTRA_ORIGIN_LON, origin.longitude())
+            }
+        }
+
+        startActivity(intent)
     }
 
     private fun ensureNotificationPermissionIfNeeded() {
