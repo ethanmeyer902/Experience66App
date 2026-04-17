@@ -25,7 +25,8 @@
           android:background="?attr/selectableItemBackgroundBorderless"
           android:src="@drawable/ic_arrow_back"
           app:tint="@color/text_primary"
-          android:contentDescription="back" />
+          android:contentDescription="@string/back" />
+
       <TextView
           android:layout_width="wrap_content"
           android:layout_height="wrap_content"
@@ -49,17 +50,10 @@
         android:id="@+id/switchNotifications"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Enable Notifications"
+        android:text="Geofence Notifications"
         android:textColor="@color/text_primary"
         android:paddingTop="12dp"
         android:paddingBottom="12dp" />
-
-    <Button
-        android:id="@+id/buttonAbout"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="24dp"
-        android:text="About" />
 
   </LinearLayout>
 </ScrollView>

@@ -1,0 +1,22 @@
+<resources>
+
+    <!-- Brand Colors -->
+    <color name="accent_blue">#2196F3</color>
+    <color name="accent_orange">#FF7A00</color>
+    <color name="accent_green">#4CAF50</color>
+    <color name="accent_red">#F44336</color>
+    <color name="accent_purple">#9C27B0</color>
+
+
+    <!-- Backgrounds -->
+    <color name="surface">#1E1E1E</color>
+    <color name="card_background">#2A2A2A</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#DDDDDD</color>
+    <color name="text_muted">#AAAAAA</color>
+
+    <!-- Basics -->
+    <color name="white">#FFFFFF</color>
+</resources>

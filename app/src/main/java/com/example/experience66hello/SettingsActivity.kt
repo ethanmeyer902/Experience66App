@@ -1,69 +1,61 @@
 package com.example.experience66hello
 
+import android.content.SharedPreferences
 import android.os.Bundle
-import android.widget.LinearLayout
-import android.widget.Switch
-import android.widget.TextView
+import android.widget.ImageButton
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.appcompat.widget.SwitchCompat
 
 class SettingsActivity : AppCompatActivity() {
 
+    private lateinit var prefs: SharedPreferences
+    private lateinit var switchDarkMode: SwitchCompat
+    private lateinit var switchNotifications: SwitchCompat
+    private lateinit var buttonBack: ImageButton
+
     override fun onCreate(savedInstanceState: Bundle?) {
-        val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
-        val darkModeEnabled = prefs.getBoolean(AppSettings.KEY_DARK_MODE, false)
+        val prefsTemp = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
+        val darkModeEnabled = prefsTemp.getBoolean(AppSettings.KEY_DARK_MODE, false)
+
         AppCompatDelegate.setDefaultNightMode(
             if (darkModeEnabled) AppCompatDelegate.MODE_NIGHT_YES
             else AppCompatDelegate.MODE_NIGHT_NO
         )
 
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_settings)
 
-        supportActionBar?.setDisplayHomeAsUpEnabled(true)
-        supportActionBar?.title = "Settings"
+        prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(48, 48, 48, 48)
+        if (!prefs.contains(AppSettings.KEY_NOTIFICATIONS_ENABLED)) {
+            prefs.edit().putBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, true).apply()
         }
 
-        val darkTitle = TextView(this).apply {
-            text = "Dark Mode"
-            textSize = 18f
-        }
-        val darkSwitch = Switch(this).apply {
-            isChecked = darkModeEnabled
-            setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean(AppSettings.KEY_DARK_MODE, checked).apply()
-                AppCompatDelegate.setDefaultNightMode(
-                    if (checked) AppCompatDelegate.MODE_NIGHT_YES
-                    else AppCompatDelegate.MODE_NIGHT_NO
-                )
-            }
+        buttonBack = findViewById(R.id.buttonBack)
+        switchDarkMode = findViewById(R.id.switchDarkMode)
+        switchNotifications = findViewById(R.id.switchNotifications)
+
+        buttonBack.setOnClickListener {
+            finish()
         }
 
-        val notifTitle = TextView(this).apply {
-            text = "Geofence Notifications"
-            textSize = 18f
-            setPadding(0, 48, 0, 0)
+        switchDarkMode.isChecked = prefs.getBoolean(AppSettings.KEY_DARK_MODE, false)
+        switchNotifications.isChecked = prefs.getBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, true)
+
+        switchDarkMode.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(AppSettings.KEY_DARK_MODE, isChecked).apply()
+
+            AppCompatDelegate.setDefaultNightMode(
+                if (isChecked) AppCompatDelegate.MODE_NIGHT_YES
+                else AppCompatDelegate.MODE_NIGHT_NO
+            )
+
+            recreate()
         }
-        val notifSwitch = Switch(this).apply {
-            isChecked = prefs.getBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, true)
-            setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, checked).apply()
-            }
+
+        switchNotifications.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(AppSettings.KEY_NOTIFICATIONS_ENABLED, isChecked).apply()
         }
-
-        root.addView(darkTitle)
-        root.addView(darkSwitch)
-        root.addView(notifTitle)
-        root.addView(notifSwitch)
-
-        setContentView(root)
-    }
-
-    override fun onSupportNavigateUp(): Boolean {
-        finish()
-        return true
     }
 }

@@ -5,6 +5,6 @@ package com.example.experience66hello
  */
 object AppSettings {
     const val PREFS_NAME = "experience66_prefs"
-    const val KEY_DARK_MODE = "dark_mode_enabled"
+    const val KEY_DARK_MODE = "dark_mode"
     const val KEY_NOTIFICATIONS_ENABLED = "notifications_enabled"
 }

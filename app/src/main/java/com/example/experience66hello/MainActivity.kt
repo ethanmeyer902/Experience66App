@@ -68,6 +68,7 @@ import com.mapbox.maps.extension.style.layers.properties.generated.TextAnchor
 import com.mapbox.maps.extension.style.layers.properties.generated.TextJustify
 import android.text.Editable
 import android.text.TextWatcher
+import com.mapbox.maps.plugin.compass.compass
 
 /**
  * Main activity for Route 66 Experience app
@@ -100,7 +101,10 @@ class MainActivity : AppCompatActivity() {
 
     private var pointAnnotationManager: PointAnnotationManager? = null
     private var circleAnnotationManager: CircleAnnotationManager? = null
-
+    //menu
+    private lateinit var sideMenuPanel: LinearLayout
+    private lateinit var sideMenuOverlay: View
+    private var isSideMenuOpen = false
     /** True when circles were drawn for all landmarks (e.g. after geofence highlight); false = subset only. */
     private var geofenceCirclesUseFullLandmarkSet = false
     private var geofenceCameraCancelable: Cancelable? = null
@@ -114,7 +118,6 @@ class MainActivity : AppCompatActivity() {
     private var appliedPoiLabelZoomBucket: Int = Int.MIN_VALUE
     private var cachedPoiMarkerBitmap: Bitmap? = null
 
-    private lateinit var poisBtn: Button
     // Track which landmarks the user is currently inside
     private val activeLandmarks = mutableSetOf<String>()
     
@@ -357,6 +360,9 @@ class MainActivity : AppCompatActivity() {
 
         // Create and add Search UI
         createTopSearchAndButtons(rootLayout)
+
+        createSideMenu(rootLayout)
+        createBottomMapButtons(rootLayout)
         // Create and add POI detail card
         createLandmarkDetailCard(rootLayout)
 
@@ -383,7 +389,16 @@ class MainActivity : AppCompatActivity() {
             isStyleLoaded = true
             setupAnnotationManagers()
             registerGeofenceCircleCameraListener()
-
+            //compass positioning
+            rootLayout.post {
+                mapView.compass.apply {
+                    enabled = true
+                    fadeWhenFacingNorth = false
+                    position = Gravity.END or Gravity.BOTTOM
+                    marginRight = 16.dp().toFloat()
+                    marginBottom = 260.dp().toFloat()
+                }
+            }
             // ===== ROUTE 66 LINE =====
 
             val routeSource = geoJsonSource("route66-source") {
@@ -924,20 +939,27 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val settingsBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_manage)
-            layoutParams = LinearLayout.LayoutParams(36.dp(), 36.dp()).apply {
+        val menuBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_menu)
+            layoutParams = LinearLayout.LayoutParams(44.dp(), 44.dp()).apply {
                 marginEnd = 8.dp()
             }
+
             background = androidx.core.content.ContextCompat.getDrawable(
                 this@MainActivity,
                 R.drawable.btn_circle
             )
-            backgroundTintList = android.content.res.ColorStateList.valueOf(color(R.color.accent_blue))
-            setColorFilter(color(R.color.white))
-            setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
+
+            backgroundTintList = android.content.res.ColorStateList.valueOf(
+                color(R.color.card_background)
+            )
+
+            elevation = 8f
+            setPadding(10.dp(), 10.dp(), 10.dp(), 10.dp())
+            setColorFilter(color(R.color.text_primary))
+
             setOnClickListener {
-                startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+                toggleSideMenu()
             }
         }
 
@@ -977,9 +999,7 @@ class MainActivity : AppCompatActivity() {
                         searchPanel.visibility = View.GONE
                         isSearchVisible = false
                         searchResultsContainer.removeAllViews()
-                        poisBtn.visibility = View.VISIBLE
                     } else {
-                        poisBtn.visibility = View.GONE
                         performSearch()
                     }
                 }
@@ -1002,27 +1022,8 @@ class MainActivity : AppCompatActivity() {
         searchBox.addView(searchBar)
         searchBox.addView(searchClearBtn)
 
-        topRow.addView(settingsBtn)
+        topRow.addView(menuBtn)
         topRow.addView(searchBox)
-
-        poisBtn = Button(this).apply {
-            text = "POIs"
-            textSize = 12f
-            setBackgroundColor(color(R.color.surface))
-            setTextColor(color(R.color.text_primary))
-            setPadding(18.dp(), 10.dp(), 18.dp(), 10.dp())
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = 10.dp()
-                gravity = Gravity.END
-            }
-
-            setOnClickListener {
-                poiListLauncher.launch(Intent(this@MainActivity, PoiListActivity::class.java))
-            }
-        }
 
         searchPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1052,7 +1053,6 @@ class MainActivity : AppCompatActivity() {
         searchPanel.addView(searchResultsScrollView)
 
         topContainer.addView(topRow)
-        topContainer.addView(poisBtn)
         topContainer.addView(searchPanel)
 
         val params = FrameLayout.LayoutParams(
@@ -1072,6 +1072,238 @@ class MainActivity : AppCompatActivity() {
             topContainer.layoutParams = params
         }
     }
+    private fun createSideMenu(rootLayout: FrameLayout) {
+        sideMenuOverlay = View(this).apply {
+            setBackgroundColor(Color.parseColor("#66000000"))
+            visibility = View.GONE
+            setOnClickListener { hideSideMenu() }
+        }
+
+        rootLayout.addView(
+            sideMenuOverlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+
+        val menuWidth = (resources.displayMetrics.widthPixels * 0.35f).toInt()
+
+        sideMenuPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(color(R.color.card_background))
+            elevation = 18f
+            visibility = View.GONE
+            setPadding(16.dp(), 24.dp(), 16.dp(), 24.dp())
+        }
+
+        val title = TextView(this).apply {
+            text = "Menu"
+            textSize = 20f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(color(R.color.text_primary))
+            setPadding(0, 0, 0, 20.dp())
+        }
+
+        fun makeMenuItem(textValue: String, onClick: () -> Unit): TextView {
+            return TextView(this).apply {
+                text = textValue
+                textSize = 16f
+                setTextColor(color(R.color.text_primary))
+                setPadding(0, 14.dp(), 0, 14.dp())
+                setOnClickListener {
+                    hideSideMenu()
+                    onClick()
+                }
+            }
+        }
+
+        val poiItem = makeMenuItem("POI List") {
+            poiListLauncher.launch(Intent(this@MainActivity, PoiListActivity::class.java))
+        }
+
+        val settingsItem = makeMenuItem("Settings") {
+            startActivity(Intent(this@MainActivity, SettingsActivity::class.java))
+        }
+
+        val aboutItem = makeMenuItem("About") {
+            startActivity(Intent(this@MainActivity, AboutActivity::class.java))
+        }
+
+        sideMenuPanel.addView(title)
+        sideMenuPanel.addView(poiItem)
+        sideMenuPanel.addView(settingsItem)
+        sideMenuPanel.addView(aboutItem)
+
+        val params = FrameLayout.LayoutParams(
+            menuWidth,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ).apply {
+            gravity = Gravity.START
+        }
+
+        rootLayout.addView(sideMenuPanel, params)
+    }
+    private fun toggleSideMenu() {
+        if (isSideMenuOpen) hideSideMenu() else showSideMenu()
+    }
+
+    private fun showSideMenu() {
+        sideMenuOverlay.visibility = View.VISIBLE
+        sideMenuPanel.visibility = View.VISIBLE
+        isSideMenuOpen = true
+    }
+
+    private fun hideSideMenu() {
+        sideMenuOverlay.visibility = View.GONE
+        sideMenuPanel.visibility = View.GONE
+        isSideMenuOpen = false
+    }
+    private fun zoomToRoute66Overview() {
+        mapView.mapboxMap.setCamera(
+            CameraOptions.Builder()
+                .center(Point.fromLngLat(-111.5, 35.1))
+                .zoom(7.0)
+                .bearing(0.0)
+                .pitch(0.0)
+                .build()
+        )
+    }
+
+    private fun centerOnUserLocationButton() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestFineLocationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+            return
+        }
+
+        fusedLocationClient.lastLocation
+            .addOnSuccessListener { location ->
+                if (location != null) {
+                    mapView.mapboxMap.setCamera(
+                        CameraOptions.Builder()
+                            .center(Point.fromLngLat(location.longitude, location.latitude))
+                            .zoom(14.0)
+                            .build()
+                    )
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Current location not available yet",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    centerWhenFirstLocationIndicatorArrives()
+                }
+            }
+            .addOnFailureListener {
+                Toast.makeText(
+                    this,
+                    "Could not get current location",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+    }
+
+    private fun createCircleMapButton(
+        iconRes: Int? = null,
+        text: String? = null,
+        iconTint: Int = color(R.color.text_primary),
+        textColor: Int = color(R.color.text_primary),
+        onClick: () -> Unit
+    ): FrameLayout {
+        val size = 56.dp()
+
+        return FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                bottomMargin = 12.dp()
+            }
+
+            background = androidx.core.content.ContextCompat.getDrawable(
+                this@MainActivity,
+                R.drawable.btn_circle
+            )
+
+            elevation = 10f
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+
+            if (iconRes != null) {
+                addView(
+                    ImageView(this@MainActivity).apply {
+                        setImageResource(iconRes)
+                        val iconSize = when (iconRes) {
+                            R.drawable.route66_icon -> 40.dp()   // bigger shield
+                            R.drawable.user_location_dot -> 20.dp() // match compass better
+                            else -> 24.dp()
+                        }
+
+                        layoutParams = FrameLayout.LayoutParams(
+                            iconSize,
+                            iconSize,
+                            Gravity.CENTER
+                        )
+
+                        if (iconRes != R.drawable.route66_icon) {
+                            setColorFilter(iconTint)
+                        }
+                    }
+                )
+            }
+
+            if (text != null) {
+                addView(
+                    TextView(this@MainActivity).apply {
+                        this.text = text
+                        textSize = 16f
+                        setTypeface(null, Typeface.BOLD)
+                        gravity = Gravity.CENTER
+                        setTextColor(textColor)
+                        layoutParams = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.CENTER
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    private fun createBottomMapButtons(rootLayout: FrameLayout) {
+        val controlsColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+
+        val route66Btn = createCircleMapButton(
+            iconRes = R.drawable.route66_icon
+        ) {
+            zoomToRoute66Overview()
+        }
+
+        val locationBtn = createCircleMapButton(
+            iconRes = R.drawable.user_location_dot,
+            iconTint = color(R.color.accent_blue)
+        ) {
+            centerOnUserLocationButton()
+        }
+        controlsColumn.addView(locationBtn)
+        controlsColumn.addView(route66Btn)
+
+
+        val params = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.END or Gravity.BOTTOM
+            rightMargin = 16.dp()
+            bottomMargin = 120.dp()
+        }
+
+        rootLayout.addView(controlsColumn, params)
+    }
 
     /**
      * Perform search for POI or call number
@@ -1083,11 +1315,8 @@ class MainActivity : AppCompatActivity() {
             searchPanel.visibility = View.GONE
             isSearchVisible = false
             searchResultsContainer.removeAllViews()
-            poisBtn.visibility = View.VISIBLE
             return
         }
-
-        poisBtn.visibility = View.GONE
 
         val results = route66DatabaseRepository.searchLandmarks(query).ifEmpty {
             ArizonaLandmarks.landmarks.filter { landmark ->
