@@ -200,22 +200,7 @@ class PoiListActivity : AppCompatActivity() {
     }
 
     private fun navigateToLandmark(landmark: Route66Landmark) {
-        val lat = landmark.latitude
-        val lon = landmark.longitude
-
-        val gmmIntentUri = android.net.Uri.parse("google.navigation:q=$lat,$lon&mode=d")
-        val mapIntent = Intent(Intent.ACTION_VIEW, gmmIntentUri).apply {
-            setPackage("com.google.android.apps.maps")
-        }
-
-        if (mapIntent.resolveActivity(packageManager) != null) {
-            startActivity(mapIntent)
-        } else {
-            val browserUri = android.net.Uri.parse(
-                "https://www.google.com/maps/dir/?api=1&destination=$lat,$lon&travelmode=driving"
-            )
-            startActivity(Intent(Intent.ACTION_VIEW, browserUri))
-        }
+        NavigationHelper.startNavigation(this, landmark)
     }
 
     private fun listenToLandmark(landmark: Route66Landmark) {
