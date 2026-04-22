@@ -3,8 +3,8 @@ package com.example.experience66hello
 import com.mapbox.geojson.Point
 
 /**
- * Represents a single entry from the Route 66 Database CSV file
- * Contains all the POI information including location, narrative, and URLs
+ * Represents a single POI row from **`CUpdated.csv`** (see [Route66DatabaseParser.POI_DATASET_ASSET_NAME]).
+ * Contains location, narrative, and URLs for map, list, and geofencing.
  */
 data class Route66DatabaseEntry(
     val objectId: String,
@@ -24,7 +24,11 @@ data class Route66DatabaseEntry(
     val zip: String?,
     val county: String?,
     val latitude: Double?,
-    val longitude: Double?
+    val longitude: Double?,
+    /** CONTENTdm image API URL from cleaned POI CSV (optional column). */
+    val imageUrl: String? = null,
+    val imageTitle: String? = null,
+    val source: String? = null,
 ) {
     /**
      * Converts this database entry to a Route66Landmark
@@ -33,8 +37,13 @@ data class Route66DatabaseEntry(
     fun toLandmark(): Route66Landmark? {
         if (latitude == null || longitude == null) return null
         
-        // Create ID from locationId, replacing dashes and spaces with underscores
-        val id = locationId.lowercase().replace("-", "_").replace(" ", "_")
+        // Create ID from locationId, fallback to objectId for test rows that omit LocationID.
+        val id = locationId
+            .takeIf { it.isNotBlank() }
+            ?.lowercase()
+            ?.replace("-", "_")
+            ?.replace(" ", "_")
+            ?: "obj_$objectId"
         
         // Use cleaned CSV description first, then fallback to legacy narrative/historic fields.
         val landmarkDescription = description?.takeIf { it.isNotBlank() }
@@ -61,15 +70,37 @@ data class Route66DatabaseEntry(
     }
     
     /**
-     * Checks if this entry matches a search query
-     * Searches in name, historic name, city, narrative, and location ID
+     * Combined text from the CUpdated.csv row for keyword search (coordinates stay on lat/lon fields).
      */
-    fun matchesSearch(searchTerm: String): Boolean {
-        val term = searchTerm.lowercase()
-        return name.lowercase().contains(term) ||
-               historicName?.lowercase()?.contains(term) == true ||
-               city?.lowercase()?.contains(term) == true ||
-               narrative?.lowercase()?.contains(term) == true ||
-               locationId.lowercase().contains(term)
+    private fun searchHaystack(): String {
+        return listOfNotNull(
+            name,
+            historicName,
+            description,
+            narrative,
+            city,
+            county,
+            state,
+            locationId,
+            objectId,
+            imageTitle,
+            source,
+            status,
+        ).joinToString(" ").lowercase()
+    }
+
+    /**
+     * Matches the user search query against this POI row.
+     * Supports multi-word queries: every token (length ≥ 2) must appear somewhere in the haystack,
+     * so searches use the longer Description and Image_Title keywords from the CSV, not only the title.
+     */
+    fun matchesSearch(rawQuery: String): Boolean {
+        val q = rawQuery.trim().lowercase()
+        if (q.isEmpty()) return false
+        val hay = searchHaystack()
+        if (hay.contains(q)) return true
+        val tokens = q.split(Regex("\\s+")).map { it.trim() }.filter { it.length >= 2 }
+        if (tokens.isEmpty()) return false
+        return tokens.all { token -> hay.contains(token) }
     }
 }

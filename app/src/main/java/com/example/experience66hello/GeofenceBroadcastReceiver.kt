@@ -44,17 +44,21 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        val geofencingEvent = GeofencingEvent.fromIntent(intent)
+        val pendingResult = goAsync()
+        val appContext = context.applicationContext
+        try {
+            ensureLandmarksLoaded(appContext)
+            val geofencingEvent = GeofencingEvent.fromIntent(intent)
 
-        if (geofencingEvent == null) {
-            Log.e(TAG, "GeofencingEvent is null")
-            return
-        }
+            if (geofencingEvent == null) {
+                Log.e(TAG, "GeofencingEvent is null")
+                return
+            }
 
-        if (geofencingEvent.hasError()) {
-            Log.e(TAG, "Geofencing error: ${geofencingEvent.errorCode}")
-            return
-        }
+            if (geofencingEvent.hasError()) {
+                Log.e(TAG, "Geofencing error: ${geofencingEvent.errorCode}")
+                return
+            }
 
         val geofenceTransition = geofencingEvent.geofenceTransition
         val triggeringGeofences = geofencingEvent.triggeringGeofences ?: return
@@ -93,13 +97,32 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
             if (transitionType == "ENTER") {
                 showPoiUpAheadNotification(
-                    context = context,
+                    context = appContext,
                     landmarkId = landmarkId,
                     landmarkName = landmark?.name ?: "Unknown POI",
                     triggerToPoiMeters = triggerToPoiMeters,
                     triggerLocation = triggerLocation
                 )
             }
+        }
+        } finally {
+            pendingResult.finish()
+        }
+    }
+
+    /**
+     * Geofence delivery can start the process before [MainActivity] runs; [ArizonaLandmarks] would
+     * otherwise be empty and notifications would show wrong distance / "Unknown" names.
+     */
+    private fun ensureLandmarksLoaded(context: Context) {
+        if (ArizonaLandmarks.landmarks.isNotEmpty()) return
+        try {
+            val repo = Route66DatabaseRepository(context)
+            repo.loadDatabase()
+            ArizonaLandmarks.initialize(repo.getAllLandmarks())
+            Log.d(TAG, "Loaded ${ArizonaLandmarks.landmarks.size} landmarks inside geofence receiver")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to load landmarks for geofence notification", e)
         }
     }
 
@@ -119,8 +142,9 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             return
         }
 
-        val distanceText = triggerToPoiMeters?.let { formatDistance(it) } ?: "nearby"
-        val contentText = "$landmarkName up ahead • $distanceText"
+        val distanceText = formatDistance(triggerToPoiMeters ?: 0f)
+        // User story: [POI] up ahead [distance]
+        val contentText = "$landmarkName up ahead $distanceText"
 
         val showIntent = createMainActivityIntent(
             context,
@@ -156,19 +180,30 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         )
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_map)
+            .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("Historical point up-ahead")
             .setContentText(contentText)
             .setStyle(NotificationCompat.BigTextStyle().bigText(contentText))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setTicker(contentText)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDefaults(android.app.Notification.DEFAULT_SOUND or android.app.Notification.DEFAULT_VIBRATE)
             .setAutoCancel(true)
+            .setOnlyAlertOnce(false)
             .setContentIntent(showIntent)
             .addAction(0, "Listen", listenIntent)
             .addAction(0, "More info", moreIntent)
             .addAction(0, "Navigate", navigateIntent)
             .build()
 
-        NotificationManagerCompat.from(context).notify(landmarkId.hashCode(), notification)
+        try {
+            // Use a non-negative id (some OEMs mishandle negative notification ids).
+            val notifyId = landmarkId.hashCode() and 0x7fff_ffff
+            NotificationManagerCompat.from(context).notify(notifyId, notification)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Cannot post geofence notification", e)
+        }
     }
 
     private fun createMainActivityIntent(

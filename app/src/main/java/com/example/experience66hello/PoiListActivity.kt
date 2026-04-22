@@ -59,7 +59,10 @@ class PoiListActivity : AppCompatActivity() {
 
         super.onCreate(savedInstanceState)
 
-        allPois = ArizonaLandmarks.landmarks
+        // Same source as the map: [Route66DatabaseParser.POI_DATASET_ASSET_NAME] (CUpdated.csv).
+        val route66Repository = Route66DatabaseRepository(this)
+        route66Repository.loadDatabase()
+        allPois = route66Repository.getAllLandmarks()
 
         poiAdapter = PoiAdapter(
             onShow = { landmark ->

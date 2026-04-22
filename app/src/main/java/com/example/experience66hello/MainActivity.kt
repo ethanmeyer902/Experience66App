@@ -8,9 +8,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.graphics.Typeface
 import android.net.ConnectivityManager
 import android.net.Network
@@ -37,9 +37,14 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import com.google.android.gms.location.LocationServices
+import com.mapbox.geojson.Feature
+import com.mapbox.geojson.FeatureCollection
 import com.mapbox.geojson.Point
 import com.mapbox.maps.CameraOptions
+import com.mapbox.maps.EdgeInsets
+import com.mapbox.maps.Image
 import com.mapbox.maps.ImageHolder
+import com.mapbox.bindgen.DataRef
 import com.mapbox.common.Cancelable
 import com.mapbox.maps.MapView
 import com.mapbox.maps.Style
@@ -47,10 +52,7 @@ import com.mapbox.maps.plugin.LocationPuck2D
 import com.mapbox.maps.plugin.annotation.annotations
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationManager
 import com.mapbox.maps.plugin.annotation.generated.CircleAnnotationOptions
-import com.mapbox.maps.plugin.annotation.generated.PointAnnotationManager
-import com.mapbox.maps.plugin.annotation.generated.PointAnnotationOptions
 import com.mapbox.maps.plugin.annotation.generated.createCircleAnnotationManager
-import com.mapbox.maps.plugin.annotation.generated.createPointAnnotationManager
 import com.mapbox.maps.plugin.locationcomponent.location
 import com.mapbox.maps.plugin.locationcomponent.OnIndicatorPositionChangedListener
 import java.text.SimpleDateFormat
@@ -58,7 +60,11 @@ import java.util.Date
 import java.util.Locale
 import android.net.Uri
 import android.speech.tts.TextToSpeech
+import com.mapbox.maps.extension.style.expressions.generated.Expression
+import com.mapbox.maps.extension.style.layers.addLayerAbove
 import com.mapbox.maps.extension.style.layers.generated.lineLayer
+import com.mapbox.maps.extension.style.layers.generated.symbolLayer
+import com.mapbox.maps.extension.style.sources.generated.GeoJsonSource
 import com.mapbox.maps.extension.style.sources.generated.geoJsonSource
 import com.mapbox.maps.extension.style.style
 import com.mapbox.maps.extension.style.sources.addSource
@@ -69,6 +75,13 @@ import com.mapbox.maps.extension.style.layers.properties.generated.TextJustify
 import android.text.Editable
 import android.text.TextWatcher
 import com.mapbox.maps.plugin.compass.compass
+import com.mapbox.maps.plugin.gestures.gestures
+import coil.Coil
+import coil.ImageLoader
+import coil.load
+import coil.size.Scale
+import okhttp3.OkHttpClient
+import java.nio.ByteBuffer
 
 /**
  * Main activity for Route 66 Experience app
@@ -78,10 +91,35 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         const val TAG = "MainActivity"
+        @Volatile
+        private var coilImageLoaderInstalled = false
+        private val contentDmOkHttpClient: OkHttpClient by lazy {
+            // OCLC CONTENTdm often returns 403/5xx for default OkHttp User-Agent.
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    val req = chain.request().newBuilder()
+                        .header(
+                            "User-Agent",
+                            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36"
+                        )
+                        .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+                        .header("Accept-Language", "en-US,en;q=0.9")
+                        .header("Referer", "https://cdm16748.contentdm.oclc.org/")
+                        .header("Connection", "keep-alive")
+                        .build()
+                    chain.proceed(req)
+                }
+                .build()
+        }
         private const val ACTION_SHOW = GeofenceBroadcastReceiver.ACTION_SHOW
         private const val ACTION_LISTEN = GeofenceBroadcastReceiver.ACTION_LISTEN
         private const val ACTION_MORE = GeofenceBroadcastReceiver.ACTION_MORE
         private const val ACTION_NAVIGATE = GeofenceBroadcastReceiver.ACTION_NAVIGATE
+
+        private const val POI_GEOJSON_SOURCE_ID = "route66-poi-points"
+        /** Pin bitmap for [POI_SYMBOL_LAYER_ID] (same asset feel as the old point annotations). */
+        private const val POI_PIN_IMAGE_ID = "route66-poi-pin"
+        private const val POI_SYMBOL_LAYER_ID = "route66-poi-symbols"
     }
     private lateinit var mapView: MapView
     private lateinit var geofenceManager: GeofenceManager
@@ -91,6 +129,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var route66DatabaseRepository: Route66DatabaseRepository
     private val fusedLocationClient by lazy { LocationServices.getFusedLocationProviderClient(this) }
     private var hasCenteredOnUserLocation = false
+    /** After CSV POIs load, camera fits all markers; block auto re-center on GPS so all stay in view. */
+    private var poiOverviewCameraApplied = false
     //
     private var pendingGeofenceInit = false
     private var isStyleLoaded = false
@@ -99,8 +139,12 @@ class MainActivity : AppCompatActivity() {
     private var pendingNotificationAction: String? = null
     private var pendingNotificationTriggerToPoiMeters: Float? = null
 
-    private var pointAnnotationManager: PointAnnotationManager? = null
     private var circleAnnotationManager: CircleAnnotationManager? = null
+    /** Bound when [ensurePoiLayersAdded] creates the POI GeoJSON source; used to push FeatureCollections without Style.getSource. */
+    private var poiGeoJsonSource: GeoJsonSource? = null
+    private var cachedPoiPinBitmap: Bitmap? = null
+    private var poiPinStyleImageInjected = false
+    private var mapPoiClickListenerRegistered = false
     //menu
     private lateinit var sideMenuPanel: LinearLayout
     private lateinit var sideMenuOverlay: View
@@ -111,12 +155,7 @@ class MainActivity : AppCompatActivity() {
     private val geofenceCircleRedrawHandler = Handler(Looper.getMainLooper())
     private val geofenceCircleRedrawRunnable = Runnable {
         redrawGeofenceCirclesForCurrentCamera()
-        refreshPoiMarkersForCameraZoomIfNeeded()
     }
-
-    /** Last zoom bucket used for POI label text size (avoid rebuilding markers every frame). */
-    private var appliedPoiLabelZoomBucket: Int = Int.MIN_VALUE
-    private var cachedPoiMarkerBitmap: Bitmap? = null
 
     // Track which landmarks the user is currently inside
     private val activeLandmarks = mutableSetOf<String>()
@@ -159,6 +198,9 @@ class MainActivity : AppCompatActivity() {
     // Archive items matched to the current landmark (used by About button)
     private var currentLandmarkArchiveItems: List<Route66ArchiveItem> = emptyList()
 
+    /** When the user opens a POI from the map search panel, archive / CONTENTdm matches are narrowed using this text. */
+    private var contentDmSearchFilterKeyword: String = ""
+
     // POI detail card UI components
     private lateinit var detailCard: LinearLayout
     private lateinit var detailTitleText: TextView
@@ -176,15 +218,14 @@ class MainActivity : AppCompatActivity() {
         updateDistanceForCurrentLandmark(point)
     }
 
-    // Map annotation → landmark mapping for marker clicks
-    private val landmarkByAnnotationId = mutableMapOf<String, Route66Landmark>()
-    
     // Search UI Components
     private lateinit var searchBar: EditText
     private lateinit var searchResultsScrollView: ScrollView
     private lateinit var searchResultsContainer: LinearLayout
     private lateinit var searchPanel: LinearLayout
     private var isSearchVisible = false
+
+    private val mainThreadHandler = Handler(Looper.getMainLooper())
     
     // Archive Item Detail Card
     private lateinit var archiveDetailCard: LinearLayout
@@ -231,8 +272,9 @@ class MainActivity : AppCompatActivity() {
                     "Background location needed for geofence detection",
                     Toast.LENGTH_LONG
                 ).show()
-                // Still enable location but geofencing won't work in background
+                // Still enable location; register geofences with fine-only (best-effort while app may be killed).
                 enableUserLocation()
+                tryRegisterGeofencesIfReady()
             }
         }
 
@@ -308,6 +350,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun Int.dp(): Int = (this * resources.displayMetrics.density + 0.5f).toInt()
 
+    /** Coil defaults to an OkHttp User-Agent many CDNs block; set a browser-like UA once for POI images. */
+    private fun installCoilImageLoaderIfNeeded() {
+        if (coilImageLoaderInstalled) return
+        synchronized(MainActivity::class.java) {
+            if (coilImageLoaderInstalled) return
+            val loader = ImageLoader.Builder(applicationContext)
+                .okHttpClient { contentDmOkHttpClient }
+                .build()
+            Coil.setImageLoader(loader)
+            coilImageLoaderInstalled = true
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val prefs = getSharedPreferences(AppSettings.PREFS_NAME, MODE_PRIVATE)
         val darkModeEnabled = prefs.getBoolean(AppSettings.KEY_DARK_MODE, false)
@@ -317,6 +372,7 @@ class MainActivity : AppCompatActivity() {
             else AppCompatDelegate.MODE_NIGHT_NO
         )
         super.onCreate(savedInstanceState)
+        installCoilImageLoaderIfNeeded()
         ensureNotificationPermissionIfNeeded()
 
         //initialize TTS
@@ -338,7 +394,7 @@ class MainActivity : AppCompatActivity() {
         archiveRepository = ArchiveRepository(this)
         route66DatabaseRepository = Route66DatabaseRepository(this)
         
-        // Load Route 66 Database and initialize landmarks
+        // Load POIs from CUpdated.csv (see Route66DatabaseParser.POI_DATASET_ASSET_NAME) and initialize landmarks
         loadRoute66Database()
         
         // Initialize network monitoring
@@ -388,13 +444,15 @@ class MainActivity : AppCompatActivity() {
         val mapStyle = if (darkModeEnabled) Style.DARK else Style.MAPBOX_STREETS
 
         mapView.mapboxMap.loadStyle(mapStyle) { style ->
+            poiGeoJsonSource = null
+            poiPinStyleImageInjected = false
             isStyleLoaded = true
             setupAnnotationManagers()
             registerGeofenceCircleCameraListener()
             //compass positioning
             rootLayout.post {
                 mapView.compass.apply {
-                    enabled = true
+                    enabled = false
                     fadeWhenFacingNorth = false
                     position = Gravity.END or Gravity.BOTTOM
                     marginRight = 16.dp().toFloat()
@@ -417,6 +475,9 @@ class MainActivity : AppCompatActivity() {
 
             style.addLayer(routeLayer)
 
+            ensurePoiLayersAdded(style)
+            registerMapPoiTapIfNeeded()
+
             // ==========================
 
             if (pendingMarkers) {
@@ -425,6 +486,7 @@ class MainActivity : AppCompatActivity() {
                 drawAllGeofenceCircles()
                 updateGeofenceListDisplay()
                 tryRegisterGeofencesIfReady()
+                scheduleFitCameraToAllPois()
             }
 
             requestLocationPermissions()
@@ -618,11 +680,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Load Route 66 Database from CSV and initialize landmarks
+     * Load POIs from CUpdated.csv and initialize landmarks
      */
     private fun loadRoute66Database() {
         runOnUiThread {
-            Toast.makeText(this, "Loading Route 66 Database...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Loading POIs (CUpdated.csv)…", Toast.LENGTH_SHORT).show()
         }
         
         Thread {
@@ -654,14 +716,13 @@ class MainActivity : AppCompatActivity() {
 
                     if (isStyleLoaded) {
                         // safe to draw now
-                        pointAnnotationManager?.deleteAll()
                         circleAnnotationManager?.deleteAll()
-                        landmarkByAnnotationId.clear()
 
                         addAllLandmarkMarkers()
                         drawAllGeofenceCircles()
                         updateGeofenceListDisplay()
                         tryRegisterGeofencesIfReady()
+                        scheduleFitCameraToAllPois()
                     } else {
                         // style not ready yet; draw later
                         pendingMarkers = true
@@ -692,7 +753,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     tryProcessPendingNotificationAction()
-                    Log.d(TAG, "Loaded ${landmarks.size} landmarks from Route 66 Database")
+                    Log.d(TAG, "Loaded ${landmarks.size} POIs from ${Route66DatabaseParser.POI_DATASET_ASSET_NAME}")
                     
                     Toast.makeText(
                         this,
@@ -702,7 +763,7 @@ class MainActivity : AppCompatActivity() {
 
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading Route 66 Database: ${e.message}", e)
+                Log.e(TAG, "Error loading ${Route66DatabaseParser.POI_DATASET_ASSET_NAME}: ${e.message}", e)
                 e.printStackTrace()
                 runOnUiThread {
                     Toast.makeText(
@@ -1214,11 +1275,11 @@ class MainActivity : AppCompatActivity() {
         textColor: Int = color(R.color.text_primary),
         onClick: () -> Unit
     ): FrameLayout {
-        val size = 56.dp()
+        val size = 40.dp()
 
         return FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(size, size).apply {
-                bottomMargin = 12.dp()
+                bottomMargin = 8.dp()
             }
 
             background = androidx.core.content.ContextCompat.getDrawable(
@@ -1236,9 +1297,9 @@ class MainActivity : AppCompatActivity() {
                     ImageView(this@MainActivity).apply {
                         setImageResource(iconRes)
                         val iconSize = when (iconRes) {
-                            R.drawable.route66_icon -> 40.dp()   // bigger shield
-                            R.drawable.user_location_dot -> 20.dp() // match compass better
-                            else -> 24.dp()
+                            R.drawable.route66_icon -> 24.dp()
+                            R.drawable.user_location_dot -> 16.dp()
+                            else -> 16.dp()
                         }
 
                         layoutParams = FrameLayout.LayoutParams(
@@ -1247,7 +1308,7 @@ class MainActivity : AppCompatActivity() {
                             Gravity.CENTER
                         )
 
-                        if (iconRes != R.drawable.route66_icon) {
+                        if (iconRes != R.drawable.route66_icon && iconRes != R.drawable.ic_compass) {
                             setColorFilter(iconTint)
                         }
                     }
@@ -1291,6 +1352,13 @@ class MainActivity : AppCompatActivity() {
         ) {
             centerOnUserLocationButton()
         }
+        val compassBtn = createCircleMapButton(
+            iconRes = R.drawable.ic_compass,
+            iconTint = color(R.color.white)
+        ) {
+            mapView.mapboxMap.setCamera(CameraOptions.Builder().bearing(0.0).build())
+        }
+        controlsColumn.addView(compassBtn)
         controlsColumn.addView(locationBtn)
         controlsColumn.addView(route66Btn)
 
@@ -1314,6 +1382,7 @@ class MainActivity : AppCompatActivity() {
         val query = searchBar.text.toString().trim()
 
         if (query.isBlank()) {
+            contentDmSearchFilterKeyword = ""
             searchPanel.visibility = View.GONE
             isSearchVisible = false
             searchResultsContainer.removeAllViews()
@@ -1321,9 +1390,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         val results = route66DatabaseRepository.searchLandmarks(query).ifEmpty {
-            ArizonaLandmarks.landmarks.filter { landmark ->
-                landmark.name.contains(query, ignoreCase = true) ||
-                        landmark.id.contains(query, ignoreCase = true)
+            ArizonaLandmarks.landmarks.filter { lm ->
+                route66DatabaseRepository.landmarkMatchesSearchQuery(lm, query)
             }
         }
 
@@ -1364,6 +1432,7 @@ class MainActivity : AppCompatActivity() {
                 bottomMargin = 8
             }
             setOnClickListener {
+                contentDmSearchFilterKeyword = searchBar.text.toString().trim()
                 mapView.mapboxMap.setCamera(
                     CameraOptions.Builder()
                         .center(Point.fromLngLat(landmark.longitude, landmark.latitude))
@@ -1733,35 +1802,177 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupAnnotationManagers() {
         val annotationPlugin = mapView.annotations
-
-        // Point markers (Route 66 landmarks)
-        pointAnnotationManager = annotationPlugin.createPointAnnotationManager().apply {
-            // When the user taps a marker, start navigation to that point
-            addClickListener { annotation ->
-                val landmark = landmarkByAnnotationId[annotation.id]
-                if (landmark != null) {
-                    // Optional: move camera closer
-                    mapView.mapboxMap.setCamera(
-                        CameraOptions.Builder()
-                            .center(annotation.point)
-                            .zoom(12.0)
-                            .build()
-                    )
-                    showLandmarkCard(landmark.id)
-                }
-                true
-
-            //    startNavigationTo(annotation.point)
-            //    true // tell Mapbox we handled the click
-            }
-            // Pins stay visible; labels participate in collision so overlapping names drop when zoomed out (similar to Google Maps).
-            iconAllowOverlap = true
-            textOptional = true
-            textAllowOverlap = false
-        }
-
-        // Geofence circles
+        // Geofence circles (POIs use GeoJSON symbol/circle style layers — see [ensurePoiLayersAdded].)
         circleAnnotationManager = annotationPlugin.createCircleAnnotationManager()
+    }
+
+    private fun registerMapPoiTapIfNeeded() {
+        if (mapPoiClickListenerRegistered) return
+        mapPoiClickListenerRegistered = true
+        mapView.gestures.addOnMapClickListener { point ->
+            val landmark = nearestPoiLandmarkWithinTapRadius(point, maxDistanceMeters = 9_000f)
+            if (landmark != null) {
+                contentDmSearchFilterKeyword = ""
+                mapView.mapboxMap.setCamera(
+                    CameraOptions.Builder()
+                        .center(landmark.toPoint())
+                        .zoom(12.0)
+                        .build()
+                )
+                showLandmarkCard(landmark.id)
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    private fun nearestPoiLandmarkWithinTapRadius(click: Point, maxDistanceMeters: Float): Route66Landmark? {
+        val landmarksToShow = landmarksForMapPoiDisplay()
+        val groups = landmarksToShow.groupBy { coordinateGroupKey(it.latitude, it.longitude) }
+        val row = FloatArray(1)
+        var best: Route66Landmark? = null
+        var bestM = maxDistanceMeters
+        for (lm in landmarksToShow) {
+            val key = coordinateGroupKey(lm.latitude, lm.longitude)
+            val group = groups[key].orEmpty()
+            val idx = group.indexOfFirst { it.id == lm.id }.coerceAtLeast(0)
+            val markerPoint = displayPointForPoiMarker(lm, idx, group.size)
+            Location.distanceBetween(
+                click.latitude(), click.longitude(),
+                markerPoint.latitude(), markerPoint.longitude(),
+                row
+            )
+            if (row[0] < bestM) {
+                bestM = row[0]
+                best = lm
+            }
+        }
+        return best
+    }
+
+    /**
+     * Same POI rows as [PoiListActivity] ([Route66DatabaseRepository.getAllLandmarks] → [ArizonaLandmarks.initialize]).
+     */
+    private fun landmarksForMapPoiDisplay(): List<Route66Landmark> = ArizonaLandmarks.landmarks
+
+    private fun getPoiPinBitmap(): Bitmap {
+        cachedPoiPinBitmap?.let { return it }
+        val drawable = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.red_marker)
+        val bitmap = if (drawable != null) {
+            val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: 48
+            val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: 72
+            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { b ->
+                val canvas = Canvas(b)
+                drawable.setBounds(0, 0, canvas.width, canvas.height)
+                drawable.draw(canvas)
+            }
+        } else {
+            Bitmap.createBitmap(24, 36, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+        }
+        val normalized = if (bitmap.config != Bitmap.Config.ARGB_8888) {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        } else {
+            bitmap
+        }
+        cachedPoiPinBitmap = normalized
+        return normalized
+    }
+
+    private fun ensurePoiPinStyleImage(style: Style) {
+        if (poiPinStyleImageInjected) return
+        val bitmap = getPoiPinBitmap()
+        val buffer = ByteBuffer.allocateDirect(bitmap.byteCount)
+        bitmap.copyPixelsToBuffer(buffer)
+        buffer.rewind()
+        val pixelRatio = resources.displayMetrics.density
+        val mbxImage = Image(bitmap.width, bitmap.height, DataRef(buffer))
+        val result = style.addStyleImage(
+            POI_PIN_IMAGE_ID,
+            pixelRatio,
+            mbxImage,
+            false,
+            emptyList(),
+            emptyList(),
+            null
+        )
+        if (result.isError) {
+            Log.w(TAG, "addStyleImage($POI_PIN_IMAGE_ID): ${result.error}")
+        } else {
+            poiPinStyleImageInjected = true
+        }
+    }
+
+    /**
+     * POIs use a GeoJSON source + symbol layer (pin + labels), same data as the POI list screen.
+     */
+    private fun ensurePoiLayersAdded(style: Style) {
+        ensurePoiPinStyleImage(style)
+        if (!style.styleSourceExists(POI_GEOJSON_SOURCE_ID)) {
+            val src = geoJsonSource(POI_GEOJSON_SOURCE_ID) {
+                featureCollection(FeatureCollection.fromFeatures(emptyList()))
+            }
+            style.addSource(src)
+            poiGeoJsonSource = src
+        }
+        if (!style.styleLayerExists(POI_SYMBOL_LAYER_ID)) {
+            style.addLayerAbove(
+                symbolLayer(POI_SYMBOL_LAYER_ID, POI_GEOJSON_SOURCE_ID) {
+                    iconImage(POI_PIN_IMAGE_ID)
+                    iconAnchor(IconAnchor.BOTTOM)
+                    iconAllowOverlap(true)
+                    iconIgnorePlacement(true)
+                    textField(Expression.get("name"))
+                    textAnchor(TextAnchor.TOP)
+                    textOffset(listOf(0.0, 0.35))
+                    textSize(
+                        Expression.interpolate(
+                            Expression.linear(),
+                            Expression.zoom(),
+                            Expression.literal(6.5),
+                            Expression.literal(10.5),
+                            Expression.literal(9.0),
+                            Expression.literal(12.5),
+                            Expression.literal(11.0),
+                            Expression.literal(14.5),
+                            Expression.literal(13.5),
+                            Expression.literal(17.5),
+                            Expression.literal(16.5),
+                            Expression.literal(21.0)
+                        )
+                    )
+                    textColor("#FFFFFF")
+                    textHaloColor("rgba(0,0,0,0.82)")
+                    textHaloWidth(1.9)
+                    textHaloBlur(0.35)
+                    textMaxWidth(14.0)
+                    textLineHeight(1.2)
+                    textJustify(TextJustify.CENTER)
+                    textOptional(true)
+                    textAllowOverlap(false)
+                    textIgnorePlacement(false)
+                },
+                "route66-layer"
+            )
+        }
+    }
+
+    /** Same rounding as the repo [distinctBy] key so stacked CSV rows fan out slightly on the map only. */
+    private fun coordinateGroupKey(latitude: Double, longitude: Double): String =
+        "${String.format(Locale.US, "%.5f", latitude)},${String.format(Locale.US, "%.5f", longitude)}"
+
+    private fun displayPointForPoiMarker(landmark: Route66Landmark, indexInGroup: Int, groupSize: Int): Point {
+        if (groupSize <= 1) return landmark.toPoint()
+        val metersPerDegLat = 111_320.0
+        val latRad = landmark.latitude * kotlin.math.PI / 180.0
+        val metersPerDegLng = 111_320.0 * kotlin.math.cos(latRad)
+        val angle = 2.0 * kotlin.math.PI * indexInGroup / groupSize
+        val radiusMeters = 44.0
+        val dx = radiusMeters * kotlin.math.cos(angle)
+        val dy = radiusMeters * kotlin.math.sin(angle)
+        val dLat = dy / metersPerDegLat
+        val dLng = dx / metersPerDegLng
+        return Point.fromLngLat(landmark.longitude + dLng, landmark.latitude + dLat)
     }
 
     private fun registerGeofenceCircleCameraListener() {
@@ -1790,7 +2001,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun landmarksForGeofenceSubset(): List<Route66Landmark> {
         val arizonaLandmarks = ArizonaLandmarks.landmarks.filter { landmark ->
-            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-109.0
+            // Eastern AZ Route 66 reaches ~-109.05 (Lupton); keep a small margin past -109.
+            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-108.85
         }
         return if (arizonaLandmarks.size > 200) arizonaLandmarks.take(200) else arizonaLandmarks
     }
@@ -1832,111 +2044,91 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getPoiMarkerBitmap(): Bitmap {
-        cachedPoiMarkerBitmap?.let { return it }
-        val drawable = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.red_marker)
-        val bitmap = if (drawable != null) {
-            val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: 48
-            val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: 72
-            Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { b ->
-                val canvas = Canvas(b)
-                drawable.setBounds(0, 0, canvas.width, canvas.height)
-                drawable.draw(canvas)
+    /** Fits the map to every POI shown on the map / list ([landmarksForMapPoiDisplay]). */
+    private fun fitCameraToAllArizonaPois() {
+        if (!::mapView.isInitialized || !isStyleLoaded) return
+        val lms = landmarksForMapPoiDisplay()
+        if (lms.isEmpty()) return
+        try {
+            // cameraForCoordinates() with many duplicate CSV coordinates can yield a broken zoom;
+            // fit a padded lat/lng bounding box using corner points instead.
+            var minLat = Double.POSITIVE_INFINITY
+            var maxLat = Double.NEGATIVE_INFINITY
+            var minLng = Double.POSITIVE_INFINITY
+            var maxLng = Double.NEGATIVE_INFINITY
+            for (lm in lms) {
+                minLat = minOf(minLat, lm.latitude)
+                maxLat = maxOf(maxLat, lm.latitude)
+                minLng = minOf(minLng, lm.longitude)
+                maxLng = maxOf(maxLng, lm.longitude)
             }
-        } else {
-            Bitmap.createBitmap(24, 36, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
-        }
-        cachedPoiMarkerBitmap = bitmap
-        return bitmap
-    }
-
-    /** Discrete zoom bands so label size updates when zoom changes (Google Maps–style). */
-    private fun poiLabelZoomBucket(zoom: Double): Int = when {
-        zoom < 7.5 -> 0
-        zoom < 9.0 -> 1
-        zoom < 10.5 -> 2
-        zoom < 12.5 -> 3
-        zoom < 15.0 -> 4
-        else -> 5
-    }
-
-    private fun poiLabelTextSizeForBucket(bucket: Int): Double = when (bucket) {
-        0 -> 11.0
-        1 -> 12.5
-        2 -> 14.0
-        3 -> 16.5
-        4 -> 19.0
-        else -> 22.0
-    }
-
-    private fun buildPoiPointAnnotationOptions(
-        landmark: Route66Landmark,
-        markerBitmap: Bitmap,
-        textSize: Double
-    ): PointAnnotationOptions {
-        val maxHalo = (textSize / 4.0 - 0.15).coerceAtLeast(2.0)
-        val haloW = (textSize / 16.0 * 2.4).coerceIn(2.0, maxHalo)
-        return PointAnnotationOptions()
-            .withPoint(landmark.toPoint())
-            .withIconImage(markerBitmap)
-            .withIconAnchor(IconAnchor.BOTTOM)
-            .withTextField(landmark.name)
-            .withTextAnchor(TextAnchor.TOP)
-            .withTextOffset(listOf(0.0, 0.35))
-            .withTextSize(textSize)
-            .withTextColor("#FFFFFF")
-            .withTextHaloColor("rgba(0,0,0,0.82)")
-            .withTextHaloWidth(haloW)
-            .withTextHaloBlur(0.35)
-            .withTextMaxWidth(14.0)
-            .withTextLineHeight(1.2)
-            .withTextJustify(TextJustify.CENTER)
-    }
-
-    private fun rebuildPoiPointAnnotations(textSize: Double) {
-        val mgr = pointAnnotationManager ?: return
-        val markerBitmap = getPoiMarkerBitmap()
-        mgr.deleteAll()
-        landmarkByAnnotationId.clear()
-        val landmarksToShow = landmarksForGeofenceSubset()
-        landmarksToShow.forEach { landmark ->
-            val markerOptions = buildPoiPointAnnotationOptions(landmark, markerBitmap, textSize)
-            val annotation = mgr.create(markerOptions)
-            if (annotation != null) {
-                landmarkByAnnotationId[annotation.id] = landmark
-            }
+            val latSpan = (maxLat - minLat).coerceAtLeast(0.42)
+            val lngSpan = (maxLng - minLng).coerceAtLeast(1.05)
+            val padLat = latSpan * 0.14 + 0.02
+            val padLng = lngSpan * 0.14 + 0.02
+            val sw = Point.fromLngLat(minLng - padLng, minLat - padLat)
+            val se = Point.fromLngLat(maxLng + padLng, minLat - padLat)
+            val ne = Point.fromLngLat(maxLng + padLng, maxLat + padLat)
+            val nw = Point.fromLngLat(minLng - padLng, maxLat + padLat)
+            val cam = mapView.mapboxMap.cameraForCoordinates(
+                listOf(sw, se, ne, nw),
+                EdgeInsets(96.0, 44.0, 240.0, 44.0),
+                null,
+                null
+            )
+            mapView.mapboxMap.setCamera(cam)
+            poiOverviewCameraApplied = true
+            Log.d(TAG, "fitCameraToAllPois: framed ${lms.size} POIs (bbox)")
+        } catch (e: Exception) {
+            Log.w(TAG, "fitCameraToAllArizonaPois: ${e.message}")
         }
     }
 
-    private fun refreshPoiMarkersForCameraZoomIfNeeded() {
-        if (!isStyleLoaded || pointAnnotationManager == null) return
-        if (ArizonaLandmarks.landmarks.isEmpty()) return
-        val bucket = poiLabelZoomBucket(mapView.mapboxMap.cameraState.zoom)
-        if (bucket == appliedPoiLabelZoomBucket) return
-        appliedPoiLabelZoomBucket = bucket
-        rebuildPoiPointAnnotations(poiLabelTextSizeForBucket(bucket))
+    /** Runs now and delayed so POI framing wins over GPS re-center and late layout. */
+    private fun scheduleFitCameraToAllPois() {
+        mapView.post { fitCameraToAllArizonaPois() }
+        mapView.postDelayed({ fitCameraToAllArizonaPois() }, 900L)
+        mapView.postDelayed({ fitCameraToAllArizonaPois() }, 2400L)
     }
 
     /**
-     * Add markers for all Route 66 landmarks (limit to prevent UI freeze).
-     * Label size follows map zoom; collision hiding reduces clutter when zoomed out.
+     * Pushes every list POI into the GeoJSON style source (one feature per landmark).
+     * Rows that share the same rounded coordinates get a small ring offset on the map only; geofences stay on exact coords.
+     */
+    private fun syncPoiGeoJsonLayer() {
+        if (!isStyleLoaded) return
+        val style = mapView.mapboxMap.style ?: return
+        ensurePoiLayersAdded(style)
+        val landmarksToShow = landmarksForMapPoiDisplay()
+        val groups = landmarksToShow.groupBy { coordinateGroupKey(it.latitude, it.longitude) }
+        val features = landmarksToShow.map { lm ->
+            val key = coordinateGroupKey(lm.latitude, lm.longitude)
+            val group = groups[key].orEmpty()
+            val idx = group.indexOfFirst { it.id == lm.id }.coerceAtLeast(0)
+            val point = displayPointForPoiMarker(lm, idx, group.size)
+            Feature.fromGeometry(point).also { f ->
+                f.addStringProperty("id", lm.id)
+                f.addStringProperty("name", lm.name)
+            }
+        }
+        val src = poiGeoJsonSource
+        if (src == null) {
+            Log.e(TAG, "POI GeoJSON source not bound; cannot sync features")
+            return
+        }
+        src.featureCollection(FeatureCollection.fromFeatures(features))
+        Log.d(TAG, "POI GeoJSON: ${features.size} features (${ArizonaLandmarks.landmarks.size} landmarks in memory)")
+    }
+
+    /**
+     * Draws every POI from the same list as the POI list screen ([landmarksForMapPoiDisplay]) using GeoJSON + symbols.
      */
     private fun addAllLandmarkMarkers() {
         if (ArizonaLandmarks.landmarks.isEmpty()) {
             Log.w(TAG, "No landmarks to display")
             return
         }
-        val bucket = poiLabelZoomBucket(mapView.mapboxMap.cameraState.zoom)
-        appliedPoiLabelZoomBucket = bucket
-        val totalAz = ArizonaLandmarks.landmarks.count {
-            it.latitude in 31.0..37.0 && it.longitude in -115.0..-109.0
-        }
-        if (totalAz > 200) {
-            Log.w(TAG, "Too many landmarks ($totalAz), showing first 200 markers")
-        }
-        rebuildPoiPointAnnotations(poiLabelTextSizeForBucket(bucket))
-        val n = landmarksForGeofenceSubset().size
-        Log.d(TAG, "Added $n landmark markers (out of ${ArizonaLandmarks.landmarks.size} total)")
+        syncPoiGeoJsonLayer()
     }
 
     /**
@@ -2070,6 +2262,9 @@ class MainActivity : AppCompatActivity() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) return
+        if (poiOverviewCameraApplied && ArizonaLandmarks.landmarks.isNotEmpty()) {
+            return
+        }
 
         fusedLocationClient.lastLocation
             .addOnSuccessListener { location ->
@@ -2097,6 +2292,10 @@ class MainActivity : AppCompatActivity() {
         val oneTimeListener = object : OnIndicatorPositionChangedListener {
             override fun onIndicatorPositionChanged(point: Point) {
                 if (hasCenteredOnUserLocation) return
+                if (poiOverviewCameraApplied && ArizonaLandmarks.landmarks.isNotEmpty()) {
+                    locationComponent.removeOnIndicatorPositionChangedListener(this)
+                    return
+                }
                 hasCenteredOnUserLocation = true
                 mapView.mapboxMap.setCamera(
                     CameraOptions.Builder()
@@ -2120,7 +2319,14 @@ class MainActivity : AppCompatActivity() {
 
         val destination = Point.fromLngLat(landmark.longitude, landmark.latitude)
 
-        detailDistanceText.text = "Distance from POI: Loading..."
+        val straight = FloatArray(1)
+        Location.distanceBetween(
+            userPoint.latitude(), userPoint.longitude(),
+            landmark.latitude, landmark.longitude,
+            straight
+        )
+        detailDistanceText.text =
+            "Distance from POI: ${formatDistance(straight[0])} (road route loading…)"
         detailDistanceText.visibility = View.VISIBLE
 
         Thread {
@@ -2139,7 +2345,8 @@ class MainActivity : AppCompatActivity() {
                     detailDistanceText.text =
                         "Distance from POI: ${RouteDirectionsHelper.formatMiles(routeData.distanceMeters)}"
                 } else {
-                    detailDistanceText.text = "Distance unavailable right now."
+                    detailDistanceText.text =
+                        "Distance from POI: ${formatDistance(straight[0])} (straight line; driving route unavailable)"
                 }
 
                 detailDistanceText.visibility = View.VISIBLE
@@ -2147,7 +2354,7 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun updateDistanceFromLastKnownLocation(landmark: Route66Landmark) {
+    private fun updateDistanceFromLastKnownLocation(landmarkId: String, landmark: Route66Landmark) {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -2162,7 +2369,14 @@ class MainActivity : AppCompatActivity() {
                     val origin = Point.fromLngLat(location.longitude, location.latitude)
                     val destination = Point.fromLngLat(landmark.longitude, landmark.latitude)
 
-                    detailDistanceText.text = "Distance from POI: Loading..."
+                    val straight = FloatArray(1)
+                    Location.distanceBetween(
+                        location.latitude, location.longitude,
+                        landmark.latitude, landmark.longitude,
+                        straight
+                    )
+                    detailDistanceText.text =
+                        "Distance from POI: ${formatDistance(straight[0])} (road route loading…)"
                     detailDistanceText.visibility = View.VISIBLE
 
                     Thread {
@@ -2173,7 +2387,7 @@ class MainActivity : AppCompatActivity() {
                         )
 
                         runOnUiThread {
-                            if (currentLandmarkId != landmark.id || distanceModeTriggerToPoi) {
+                            if (currentLandmarkId != landmarkId || distanceModeTriggerToPoi) {
                                 return@runOnUiThread
                             }
 
@@ -2181,7 +2395,8 @@ class MainActivity : AppCompatActivity() {
                                 detailDistanceText.text =
                                     "Distance from POI: ${RouteDirectionsHelper.formatMiles(routeData.distanceMeters)}"
                             } else {
-                                detailDistanceText.text = "Distance unavailable right now."
+                                detailDistanceText.text =
+                                    "Distance from POI: ${formatDistance(straight[0])} (straight line; driving route unavailable)"
                             }
 
                             detailDistanceText.visibility = View.VISIBLE
@@ -2392,17 +2607,34 @@ class MainActivity : AppCompatActivity() {
             ?: ArizonaLandmarks.findById(landmarkId)
             ?: return // Landmarks not loaded yet; retry after DB init.
 
-        showLandmarkCard(landmarkId, pendingNotificationTriggerToPoiMeters)
+        pendingNotificationLandmarkId = null
+        pendingNotificationAction = null
+        val triggerMeters = pendingNotificationTriggerToPoiMeters
+        pendingNotificationTriggerToPoiMeters = null
+
+        showLandmarkCard(landmarkId, triggerMeters)
+
+        if (::mapView.isInitialized) {
+            mapView.mapboxMap.setCamera(
+                CameraOptions.Builder()
+                    .center(Point.fromLngLat(landmark.longitude, landmark.latitude))
+                    .zoom(13.0)
+                    .build()
+            )
+        }
+
         when (action) {
-            ACTION_LISTEN -> readCurrentLandmark()
-            ACTION_MORE -> openAboutForCurrentLandmark()
+            ACTION_LISTEN -> {
+                // TTS is created in onCreate; a short delay improves reliability when cold-starting from the notification.
+                detailCard.postDelayed({ readCurrentLandmark() }, 500L)
+            }
+            ACTION_MORE -> {
+                // Allow the archive match thread from showLandmarkCard to finish so CONTENTdm opens when items exist.
+                detailCard.postDelayed({ openAboutForCurrentLandmark() }, 450L)
+            }
             ACTION_NAVIGATE -> startNavigationTo(landmark.toPoint())
             else -> Unit
         }
-
-        pendingNotificationLandmarkId = null
-        pendingNotificationAction = null
-        pendingNotificationTriggerToPoiMeters = null
     }
     /**
      * Bottom card that shows POI details and has a "Listen" button
@@ -2455,8 +2687,9 @@ class MainActivity : AppCompatActivity() {
                 220.dp()
             )
             adjustViewBounds = true
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            setImageResource(R.mipmap.ic_launcher)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setBackgroundColor(Color.parseColor("#E8E8E8"))
+            setImageDrawable(ColorDrawable(Color.parseColor("#E8E8E8")))
         }
         detailCard.addView(detailImageView)
 
@@ -2561,36 +2794,51 @@ class MainActivity : AppCompatActivity() {
         currentLandmarkId = landmarkId
         distanceModeTriggerToPoi = triggerToPoiDistanceMeters != null
 
-        // Try to get cached offline data first
+        val lm = route66DatabaseRepository.findLandmarkById(landmarkId)
+            ?: ArizonaLandmarks.findById(landmarkId)
+
         val cached = offlineDataCache
             .getCachedLandmarks()
             .firstOrNull { it.id == landmarkId }
 
-        val title: String
-        val description: String
-        val extra: String
+        // Prefer CUpdated.csv row for title, long description, and image URL (accurate per LocationID).
+        val dbEntry = route66DatabaseRepository.findDatabaseEntryByLandmarkId(landmarkId)
+            ?: lm?.let { route66DatabaseRepository.findDatabaseEntryForLandmark(it) }
 
-        if (cached != null) {
-            title = cached.name
-            description = cached.description
-            extra = "${cached.historicalNotes}\nEstablished: ${cached.yearEstablished}"
-        } else {
-            // Fallback to in-memory landmarks
-            val lm = ArizonaLandmarks.landmarks.firstOrNull { it.id == landmarkId }
-            title = lm?.name ?: "Unknown Landmark"
-            description = lm?.description ?: ""
-            extra = ""
+        val title = dbEntry?.name?.trim()?.takeIf { it.isNotBlank() }
+            ?: lm?.name?.takeIf { it.isNotBlank() }
+            ?: cached?.name
+            ?: "Unknown Landmark"
+
+        val description = dbEntry?.description?.trim()?.takeIf { it.isNotBlank() }
+            ?: lm?.description?.takeIf { it.isNotBlank() }
+            ?: cached?.description.orEmpty()
+
+        val extra = buildString {
+            dbEntry?.let { e ->
+                val place = listOfNotNull(e.city, e.county, e.state).filter { it.isNotBlank() }.joinToString(", ")
+                if (place.isNotBlank()) append(place)
+                e.imageTitle?.trim()?.takeIf { it.isNotBlank() }?.let { t ->
+                    if (isNotEmpty()) append("\n")
+                    append(t)
+                }
+                e.source?.trim()?.takeIf { it.isNotBlank() }?.let { s ->
+                    if (isNotEmpty()) append("\n")
+                    append("Source: ").append(s)
+                }
+            }
+            if (isEmpty() && cached != null) {
+                append(cached.historicalNotes).append("\nEstablished: ").append(cached.yearEstablished)
+            }
         }
 
         detailTitleText.text = title
-        detailImageView.setImageResource(resolveLandmarkImageRes(landmarkId))
+        bindLandmarkCardImageFromCsv(landmarkId, lm, title)
         detailDescriptionText.text = description
         detailExtraText.text = extra
 
-        //save where to navigate
-        val lm = route66DatabaseRepository.findLandmarkById(landmarkId)
-            ?: ArizonaLandmarks.findById(landmarkId)
-        currentDestinationPoint = lm?.toPoint()
+        val landmarkForNav = lm ?: cached?.let { landmarkFromOfflineCache(it) }
+        currentDestinationPoint = landmarkForNav?.toPoint()
 
         if (triggerToPoiDistanceMeters != null) {
             detailDistanceText.text =
@@ -2599,21 +2847,23 @@ class MainActivity : AppCompatActivity() {
         } else {
             detailDistanceText.text = "Distance unavailable. Waiting for your current location."
             detailDistanceText.visibility = View.VISIBLE
-            if (lm != null) {
-                updateDistanceFromLastKnownLocation(lm)
+            val lmForDistance = lm ?: cached?.let { landmarkFromOfflineCache(it) }
+            if (lmForDistance != null) {
+                updateDistanceFromLastKnownLocation(landmarkId, lmForDistance)
             }
         }
 
         detailCard.visibility = View.VISIBLE
         
         // Find and store archive items for this landmark (for About button)
-        if (lm != null) {
+        val lmForArchive = lm ?: cached?.let { landmarkFromOfflineCache(it) }
+        if (lmForArchive != null) {
             Thread {
-                val matchedItems = findArchiveItemsForLandmark(lm)
+                val matchedItems = findArchiveItemsForLandmark(lmForArchive, contentDmSearchFilterKeyword)
                 runOnUiThread {
                     currentLandmarkArchiveItems = matchedItems
                     if (matchedItems.isNotEmpty()) {
-                        Log.d(TAG, "Found ${matchedItems.size} archive items for ${lm.name}")
+                        Log.d(TAG, "Found ${matchedItems.size} archive items for ${lmForArchive.name}")
                     }
                 }
             }.start()
@@ -2621,6 +2871,17 @@ class MainActivity : AppCompatActivity() {
 
         // Auto read when opened ( you can remove this line to only read on button press)
         //readTextForLandmark(title, description, extra)
+    }
+
+    private fun landmarkFromOfflineCache(c: OfflineDataCache.CachedLandmarkData): Route66Landmark {
+        return Route66Landmark(
+            id = c.id,
+            name = c.name,
+            description = c.description,
+            latitude = c.latitude,
+            longitude = c.longitude,
+            radiusMeters = c.radiusMeters
+        )
     }
 
     /**
@@ -2797,7 +3058,10 @@ class MainActivity : AppCompatActivity() {
      * Find archive items for a landmark by matching call numbers
      * Uses Route66DatabaseRepository to match POIs with CONTENTdm archive items
      */
-    private fun findArchiveItemsForLandmark(landmark: Route66Landmark): List<Route66ArchiveItem> {
+    private fun findArchiveItemsForLandmark(
+        landmark: Route66Landmark,
+        mapSearchKeyword: String = ""
+    ): List<Route66ArchiveItem> {
         // Load archive data if needed
         if (!archiveRepository.isLoaded) {
             archiveRepository.loadArchiveData()
@@ -2805,31 +3069,127 @@ class MainActivity : AppCompatActivity() {
         
         // Get all archive items
         val allItems = archiveRepository.getAllItems()
-        
-        // Use repository's matching logic
-        val matchedItems = route66DatabaseRepository.matchArchiveItemsToLandmark(landmark, allItems).toMutableList()
-        
-        // If no matches, try fallback matching
-        if (matchedItems.isEmpty()) {
-            val landmarkNameLower = landmark.name.lowercase()
-            val landmarkIdLower = landmark.id.lowercase()
-            val landmarkWords = landmarkNameLower.split(" ", "-", "_", "'", "Ghost", "Town")
-                .filter { it.length > 3 }
-            
-            allItems.forEach { item ->
-                val callLower = item.callNumber.lowercase()
-                val matches = landmarkWords.any { word ->
-                    callLower.contains(word)
-                } || callLower.contains(landmarkIdLower)
-                
-                if (matches && !matchedItems.contains(item)) {
-                    matchedItems.add(item)
-                }
-            }
+        val dbEntry = route66DatabaseRepository.findDatabaseEntryForLandmark(landmark)
+        val looseMatches = route66DatabaseRepository.matchArchiveItemsToLandmark(landmark, allItems)
+        val strictMatches = looseMatches.filter {
+            isArchiveItemStrictlyLinkedToPoi(it, landmark, dbEntry, cdmFromPoi = null, poiPrimary = null)
+        }
+
+        val matchedItems = mutableListOf<Route66ArchiveItem>()
+        when {
+            strictMatches.isNotEmpty() -> strictMatches.forEach { addDistinctArchiveItem(matchedItems, it) }
+            else -> Unit
+        }
+
+        val primaryUrl: String? = null
+        val keyword = mapSearchKeyword.trim()
+        if (keyword.isNotEmpty()) {
+            val term = keyword.lowercase()
+            val terms = term.split(Regex("\\s+")).filter { it.length >= 2 }
+            val contextHay = "${landmark.name} ${landmark.id} ${landmark.description} " +
+                "${dbEntry?.imageTitle.orEmpty()} ${dbEntry?.description.orEmpty()} " +
+                "${dbEntry?.city.orEmpty()} ${dbEntry?.county.orEmpty()}"
+                .lowercase()
+            val filtered = matchedItems.filter { item ->
+                if (primaryUrl != null && item.referenceUrl == primaryUrl) return@filter true
+                val hay = "${item.callNumber} ${item.referenceUrl} ${item.contentDmNumber} $contextHay".lowercase()
+                hay.contains(term) || terms.any { hay.contains(it) }
+            }.distinct()
+            Log.d(TAG, "Archive filter for '${landmark.name}' keyword '$keyword' -> ${filtered.size} items")
+            return filtered
         }
         
         Log.d(TAG, "Found ${matchedItems.size} archive items for ${landmark.name}")
-        return matchedItems
+        return matchedItems.distinct()
+    }
+
+    private fun addDistinctArchiveItem(list: MutableList<Route66ArchiveItem>, item: Route66ArchiveItem) {
+        if (!list.contains(item)) list.add(item)
+    }
+
+    /**
+     * Keeps CONTENTdm hits tied to this POI: same CPA id as the CSV image, CSV image title tokens in URL/call,
+     * or strong landmark name ↔ call number links (avoids unrelated Route 66 archive rows).
+     */
+    private fun isArchiveItemStrictlyLinkedToPoi(
+        item: Route66ArchiveItem,
+        landmark: Route66Landmark,
+        dbEntry: Route66DatabaseEntry?,
+        cdmFromPoi: String?,
+        poiPrimary: Route66ArchiveItem?
+    ): Boolean {
+        if (poiPrimary != null && item.referenceUrl == poiPrimary.referenceUrl) return true
+        if (cdmFromPoi != null && (item.contentDmNumber == cdmFromPoi || item.itemNumber == cdmFromPoi ||
+                item.referenceUrl.contains("/cpa/$cdmFromPoi", ignoreCase = true))) return true
+        dbEntry?.imageTitle?.let { title ->
+            val chunks = title.lowercase().split(Regex("\\W+")).filter { it.length >= 4 }
+            val ref = item.referenceUrl.lowercase()
+            val call = item.callNumber.lowercase()
+            if (chunks.any { chunk -> ref.contains(chunk) || call.contains(chunk) }) return true
+        }
+        val nameChunks = landmark.name.lowercase().split(Regex("\\W+")).filter { it.length >= 4 }
+        val callLower = item.callNumber.lowercase()
+        if (nameChunks.any { callLower.contains(it) }) return true
+        return false
+    }
+
+    /** Resolves `R.drawable.poi_<landmarkId>` (e.g. AZ011 → `poi_az011`) when a bundled hero image should override the CSV URL. */
+    private fun bundledPoiHeroImageResId(landmarkId: String): Int {
+        val resourceName = "poi_${landmarkId.lowercase().replace("-", "_")}"
+        return resources.getIdentifier(resourceName, "drawable", packageName)
+    }
+
+    /** Loads the POI header image from CSV `Image_URL` for this [landmarkId]; [cardTitle] is used to validate row keywords. */
+    private fun bindLandmarkCardImageFromCsv(landmarkId: String, lm: Route66Landmark?, cardTitle: String) {
+        val keyword = listOf(cardTitle, lm?.name.orEmpty()).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        val url = route66DatabaseRepository.resolveCsvImageUrlForPoi(landmarkId, lm, cardTitle)
+        if (url.isNullOrBlank()) {
+            Log.w(TAG, "No CSV Image_URL for keyword='$keyword' landmarkId=$landmarkId (CUpdated.csv Name / Image_URL)")
+            // Requirement: when CSV image is pending/missing, use route66_icon fallback.
+            detailImageView.setImageResource(R.drawable.route66_icon)
+            return
+        }
+
+        applyPoiCardImagePlaceholder(landmarkId)
+
+        fun loadUrl(targetUrl: String, hasRetriedHttp: Boolean) {
+            // Coil: match CSV row by POI name keyword, then load that row's URL; FIT keeps image inside placeholder.
+            detailImageView.load(targetUrl) {
+                scale(Scale.FIT)
+                crossfade(true)
+                allowHardware(false)
+                listener(
+                    onSuccess = { _, _ ->
+                        Log.d(TAG, "POI image loaded for $landmarkId")
+                    },
+                    onError = { _, result ->
+                        Log.e(TAG, "POI image failed for $landmarkId url=$targetUrl", result.throwable)
+                        val httpFallback = if (!hasRetriedHttp && targetUrl.startsWith("https://", ignoreCase = true)) {
+                            targetUrl.replaceFirst("https://", "http://")
+                        } else null
+                        if (httpFallback != null) {
+                            Log.w(TAG, "Retrying POI image with HTTP fallback for $landmarkId")
+                            loadUrl(httpFallback, hasRetriedHttp = true)
+                        } else if (currentLandmarkId == landmarkId) {
+                            // URL existed but failed to load; keep neutral placeholder (not route66 fallback).
+                            applyPoiCardImagePlaceholder(landmarkId)
+                        }
+                    }
+                )
+            }
+        }
+
+        loadUrl(url, hasRetriedHttp = false)
+    }
+
+    private fun applyPoiCardImagePlaceholder(landmarkId: String) {
+        val resourceName = "poi_${landmarkId.lowercase().replace("-", "_")}"
+        val resourceId = resources.getIdentifier(resourceName, "drawable", packageName)
+        if (resourceId != 0) {
+            detailImageView.setImageResource(resourceId)
+        } else {
+            detailImageView.setImageDrawable(ColorDrawable(Color.parseColor("#E8E8E8")))
+        }
     }
     
     /**
@@ -2861,16 +3221,6 @@ class MainActivity : AppCompatActivity() {
      * Get currently active landmarks
      */
     fun getActiveLandmarks(): Set<String> = activeLandmarks.toSet()
-
-    /**
-     * Resolves the image reference for a POI card.
-     * Tries a POI-specific drawable first, then falls back to the app icon.
-     */
-    private fun resolveLandmarkImageRes(landmarkId: String): Int {
-        val resourceName = "poi_${landmarkId.lowercase().replace("-", "_")}"
-        val resourceId = resources.getIdentifier(resourceName, "drawable", packageName)
-        return if (resourceId != 0) resourceId else R.mipmap.ic_launcher
-    }
 
     // Lifecycle management
     override fun onStart() {

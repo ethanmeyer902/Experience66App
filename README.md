@@ -10,10 +10,11 @@ An Android app for exploring Arizona Route 66 POIs with interactive mapping, geo
 
 The app now uses a cleaned POI dataset:
 
-- Asset file: `app/src/main/assets/Route_66_Database.csv`
-- Schema source: reduced landmarks CSV (cleaned Arizona-focused records)
+- Asset file: `app/src/main/assets/CUpdated.csv` (parsed by `Route66DatabaseParser`; coordinates resolve from `Lat_WGS84`/`Long_WGS84` with fallback to `Latitude`/`Longitude` and `Y`/`X`)
+- Archive metadata (separate): `app/src/main/assets/capstone-exp-66.csv`
+- If you still have `Route_66_Database.csv` in assets, delete it after closing it in your editor—it was a duplicate of `CUpdated.csv` and is not used by the app.
 - POI description field: `Description` (preferred), with fallback behavior for legacy fields
-- Duplicate filtering: applied during repository load to return valid, unique POIs
+- Duplicate filtering/cleanup: applied during repository load to return valid, usable POIs (including test-row identity fallback when needed)
 
 ## Features
 
@@ -23,7 +24,7 @@ The app now uses a cleaned POI dataset:
 - Route 66 corridor line rendered from `route66.geojson`
 - POI markers and geofence circles displayed on the map
 - POI detail card with name, historical description, and image
-- POI image resolution via `drawable/poi_<landmark_id>` with fallback to `ic_launcher`
+- POI image resolution uses CSV `Image_URL` from `CUpdated.csv` with runtime retry handling; pending/missing URLs fall back to local placeholder/icon behavior
 - POI list screen (`POIs` button) for quick browsing and map selection
 
 ### User Location
@@ -38,6 +39,7 @@ The app now uses a cleaned POI dataset:
 - ENTER, EXIT, and DWELL transition handling
 - Real-time monitor panel showing registered geofences and event log
 - Active geofence visual highlight updates on the map
+- Geofence restore after boot/package events so monitoring resumes without reopening the app
 
 ### Search and Archive
 
@@ -54,7 +56,7 @@ The app now uses a cleaned POI dataset:
 
 ### Offline and Data Reliability
 
-- Cleaned CSV-backed POI loading (`Route_66_Database.csv`)
+- CSV-backed POI loading (`CUpdated.csv`)
 - Duplicate filtering during repository load to keep valid unique POIs
 - Online/offline status bar with cache info
 - Manual `UPDATE` flow for metadata and offline map region caching
@@ -114,7 +116,8 @@ Experience66/
 │   │   ├── OfflineDataCache.kt            # Metadata cache
 │   │   └── ArchiveRepository.kt           # Archive item loading/search
 │   └── src/main/
-│       ├── assets/Route_66_Database.csv   # Active cleaned POI dataset
+│       ├── assets/CUpdated.csv            # Active POI dataset (LocationID, Lat_WGS84, Long_WGS84, …)
+│       ├── assets/capstone-exp-66.csv     # Archive CONTENTdm metadata (optional)
 │       └── res/
 │           ├── drawable/red_marker.xml
 │           └── values/mapbox-resource-token.xml
@@ -131,6 +134,8 @@ The app requires the following permissions:
 |------------|---------|
 | `ACCESS_FINE_LOCATION` | Precise location for geofencing |
 | `ACCESS_BACKGROUND_LOCATION` | Geofence detection when app is backgrounded |
+| `POST_NOTIFICATIONS` | Show geofence alert notifications |
+| `RECEIVE_BOOT_COMPLETED` | Re-register geofences after device reboot |
 | `INTERNET` | Map tiles and online features |
 | `ACCESS_NETWORK_STATE` | Offline mode detection |
 
