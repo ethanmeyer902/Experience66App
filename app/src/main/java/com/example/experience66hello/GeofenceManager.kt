@@ -27,7 +27,9 @@ class GeofenceManager(private val context: Context) {
     private val geofencingClient: GeofencingClient = LocationServices.getGeofencingClient(context)
     
     private val geofencePendingIntent: PendingIntent by lazy {
-        val intent = Intent(context, GeofenceBroadcastReceiver::class.java)
+        val intent = Intent(context, GeofenceBroadcastReceiver::class.java).apply {
+            setPackage(context.packageName)
+        }
         PendingIntent.getBroadcast(
             context,
             0,
@@ -53,7 +55,7 @@ class GeofenceManager(private val context: Context) {
         // Limit geofences to prevent performance issues (Google allows max 100 geofences)
         // Filter to Arizona landmarks and limit to 100
         val arizonaLandmarks = ArizonaLandmarks.landmarks.filter { landmark ->
-            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-109.0
+            landmark.latitude in 31.0..37.0 && landmark.longitude in -115.0..-108.85
         }
         
         val landmarksToRegister = if (arizonaLandmarks.size > 100) {
@@ -77,14 +79,18 @@ class GeofenceManager(private val context: Context) {
             .build()
         
         try {
-            geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent)
-                .addOnSuccessListener {
-                    Log.d(TAG, "Successfully registered ${geofenceList.size} geofences")
-                    onSuccess()
-                }
-                .addOnFailureListener { e ->
-                    Log.e(TAG, "Failed to register geofences: ${e.message}")
-                    onFailure(e)
+            // Remove previously registered geofences first so stale/demo entries are not kept.
+            geofencingClient.removeGeofences(geofencePendingIntent)
+                .addOnCompleteListener {
+                    geofencingClient.addGeofences(geofencingRequest, geofencePendingIntent)
+                        .addOnSuccessListener {
+                            Log.d(TAG, "Successfully registered ${geofenceList.size} geofences")
+                            onSuccess()
+                        }
+                        .addOnFailureListener { e ->
+                            Log.e(TAG, "Failed to register geofences: ${e.message}")
+                            onFailure(e)
+                        }
                 }
         } catch (e: SecurityException) {
             Log.e(TAG, "Security exception: ${e.message}")

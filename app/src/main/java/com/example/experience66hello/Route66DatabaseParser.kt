@@ -6,21 +6,24 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Parses the Route 66 Database CSV file containing POI information
- * Handles multiline fields and quoted values properly
+ * Parses the Arizona Route 66 **POI** CSV from assets (`CUpdated.csv` by default).
+ * Handles multiline fields and quoted values properly.
  */
 object Route66DatabaseParser {
     private const val TAG = "Route66DatabaseParser"
+
+    /** Asset path under `app/src/main/assets/` for POI rows (replaces legacy `Route_66_Database.csv`). */
+    const val POI_DATASET_ASSET_NAME = "CUpdated.csv"
     
     /**
-     * Reads and parses the CSV file from assets folder
-     * Returns a list of database entries with valid coordinates
+     * Reads and parses the POI CSV from assets.
+     * @param fileName almost always [POI_DATASET_ASSET_NAME]; parameter kept for tests or alternate bundles.
      */
-    fun parseRoute66Database(context: Context, fileName: String = "Route_66_Database.csv"): List<Route66DatabaseEntry> {
+    fun parseRoute66Database(context: Context, fileName: String = POI_DATASET_ASSET_NAME): List<Route66DatabaseEntry> {
         val entries = mutableListOf<Route66DatabaseEntry>()
         
         try {
-            Log.d(TAG, "Starting to parse Route 66 Database CSV...")
+            Log.d(TAG, "Parsing POI CSV: $fileName")
             val inputStream = context.assets.open(fileName)
             // Use larger buffer to handle multiline fields in CSV
             val reader = BufferedReader(InputStreamReader(inputStream), 16384)
@@ -118,7 +121,7 @@ object Route66DatabaseParser {
     private fun parseDatabaseLine(line: String, headers: List<String>): Route66DatabaseEntry? {
         if (line.isBlank()) return null
         
-        val values = parseCsvLine(line)
+        val values = normalizeCsvValues(headers, parseCsvLine(line))
         
         // Make sure we have enough values to match all headers
         if (values.size < headers.size) {
@@ -130,6 +133,33 @@ object Route66DatabaseParser {
         }
         
         return createEntry(headers, values)
+    }
+
+    /**
+     * Handles rows where Description contains unquoted commas by collapsing overflow columns back
+     * into Description so coordinates and URLs still align with their headers.
+     */
+    private fun normalizeCsvValues(headers: List<String>, rawValues: List<String>): List<String> {
+        if (rawValues.size <= headers.size) return rawValues
+
+        val descIdx = headers.indexOf("Description")
+        if (descIdx < 0) return rawValues
+
+        // Keep a fixed tail (Latitude..Source) aligned from the right edge of the row.
+        // This is resilient when Description has unquoted commas.
+        val tailCount = headers.size - descIdx - 1
+        if (tailCount <= 0 || rawValues.size <= tailCount) return rawValues
+
+        val prefix = rawValues.take(descIdx)
+        val tail = rawValues.takeLast(tailCount)
+        val descParts = rawValues.subList(descIdx, rawValues.size - tailCount)
+        val description = descParts.joinToString(",").trim()
+
+        return buildList(headers.size) {
+            addAll(prefix)
+            add(description)
+            addAll(tail)
+        }
     }
     
     /**
@@ -148,16 +178,23 @@ object Route66DatabaseParser {
             val locationId = getValue("LocationID")
             val name = getValue("Name")
             
-            // Can't create entry without these required fields
-            if (objectId.isBlank() || locationId.isBlank() || name.isBlank()) {
+            // Can't create entry without identity + display name.
+            // LocationID may be blank for test rows; OBJECTID is used as stable fallback id later.
+            if (objectId.isBlank() || name.isBlank()) {
                 return null
             }
             
-            // Parse coordinates - these are required for map display
-            val latStr = getValue("Lat_WGS84")
-            val lonStr = getValue("Long_WGS84")
-            val latitude = latStr.toDoubleOrNull()
-            val longitude = lonStr.toDoubleOrNull()
+            // Parse coordinates - use all known CSV coordinate columns so every valid POI can render.
+            val latitude = listOf(
+                getValue("Lat_WGS84"),
+                getValue("Latitude"),
+                getValue("Y")
+            ).firstNotNullOfOrNull { it.toDoubleOrNull() }
+            val longitude = listOf(
+                getValue("Long_WGS84"),
+                getValue("Longitude"),
+                getValue("X")
+            ).firstNotNullOfOrNull { it.toDoubleOrNull() }
             
             // Skip entries without valid coordinates
             if (latitude == null || longitude == null) {
@@ -182,7 +219,10 @@ object Route66DatabaseParser {
                 zip = getValue("ZIP").takeIf { it.isNotBlank() },
                 county = getValue("County").takeIf { it.isNotBlank() },
                 latitude = latitude,
-                longitude = longitude
+                longitude = longitude,
+                imageUrl = getValue("Image_URL").takeIf { it.isNotBlank() && !it.equals("PENDING", ignoreCase = true) },
+                imageTitle = getValue("Image_Title").takeIf { it.isNotBlank() },
+                source = getValue("Source").takeIf { it.isNotBlank() },
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error creating entry: ${e.message}", e)

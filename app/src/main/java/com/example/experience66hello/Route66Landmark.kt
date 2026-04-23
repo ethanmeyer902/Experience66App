@@ -26,8 +26,8 @@ data class Route66Landmark(
 }
 
 /**
- * Stores all Route 66 landmarks loaded from the database CSV
- * Initialized by MainActivity when the CSV is loaded
+ * Stores all Route 66 landmarks loaded from [Route66DatabaseParser.POI_DATASET_ASSET_NAME].
+ * Initialized when [Route66DatabaseRepository] finishes parsing.
  */
 object ArizonaLandmarks {
     var landmarks: List<Route66Landmark> = emptyList()
@@ -37,9 +37,8 @@ object ArizonaLandmarks {
      * Initializes the landmarks list with data from the database
      */
     fun initialize(landmarks: List<Route66Landmark>) {
-        this.landmarks = landmarks.map { lm ->
-            lm.copy(radiusMeters = Route66Landmark.GEOFENCE_RADIUS_METERS)
-        }
+        // Preserve per-POI radiusMeters (e.g. route-overlap sizing from [Route66ArizonaRouteGeofence]).
+        this.landmarks = landmarks
     }
     
     fun findById(id: String): Route66Landmark? = landmarks.find { it.id == id }
