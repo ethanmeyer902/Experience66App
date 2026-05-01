@@ -7,9 +7,9 @@
         android:fillColor="#FF3B30"
         android:pathData="M12,3.2L8.6,10.2H15.4L12,3.2Z" />
     <path
-        android:fillColor="#0B0B0B"
+        android:fillColor="@color/text_muted"
         android:pathData="M12,9.5L9.2,12.0L12,13.6L14.8,12.0L12,9.5Z" />
     <path
-        android:fillColor="#FFFFFFFF"
+        android:fillColor="@color/text_primary"
         android:pathData="M12,20.8L8.6,13.2H15.4L12,20.8Z" />
 </vector>
