@@ -82,6 +82,11 @@ import coil.load
 import coil.size.Scale
 import okhttp3.OkHttpClient
 import java.nio.ByteBuffer
+import android.content.res.ColorStateList
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import android.view.animation.AccelerateDecelerateInterpolator
+import com.mapbox.maps.plugin.scalebar.scalebar
 
 /**
  * Main activity for Route 66 Experience app
@@ -124,7 +129,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mapView: MapView
     private lateinit var geofenceManager: GeofenceManager
     private lateinit var offlineMapManager: OfflineMapManager
-    private lateinit var offlineDataCache: OfflineDataCache
     private lateinit var archiveRepository: ArchiveRepository
     private lateinit var route66DatabaseRepository: Route66DatabaseRepository
     private val fusedLocationClient by lazy { LocationServices.getFusedLocationProviderClient(this) }
@@ -168,12 +172,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var geofenceListTextView: TextView
     private lateinit var eventLogTextView: TextView
     private var isMonitorVisible = false
-    
-    // UI components for offline status bar
-    private lateinit var offlineStatusBar: LinearLayout
-    private lateinit var offlineStatusText: TextView
-    private lateinit var offlineStatusIcon: TextView
-    private lateinit var downloadProgress: ProgressBar
     private var isOnline = true
     
     // Network monitoring to detect when device goes offline
@@ -208,9 +206,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var detailDescriptionText: TextView
     private lateinit var detailDistanceText: TextView
     private lateinit var detailExtraText: TextView
-    private lateinit var detailListenButton: Button
-    private lateinit var detailAboutButton: Button
-
     private lateinit var topContainer: LinearLayout
     private lateinit var searchClearBtn: TextView
     private val liveDistanceListener = OnIndicatorPositionChangedListener { point ->
@@ -241,6 +236,62 @@ class MainActivity : AppCompatActivity() {
         return androidx.core.content.ContextCompat.getColor(this, id)
     }
 
+    private fun createPillButton(
+        text: String,
+        iconRes: Int,
+        bgColor: Int,
+        contentColor: Int,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val height = 46.dp()
+
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                height
+            ).apply {
+                marginEnd = 10.dp()
+            }
+
+            setPadding(12.dp(), 0, 12.dp(), 0)
+            elevation = 4f
+
+            background = androidx.core.content.ContextCompat.getDrawable(
+                this@MainActivity,
+                R.drawable.btn_pill
+            )
+
+            backgroundTintList = ColorStateList.valueOf(bgColor)
+
+            setOnClickListener { onClick() }
+
+            addView(
+                ImageView(this@MainActivity).apply {
+                    setImageResource(iconRes)
+                    setColorFilter(contentColor)
+
+                    layoutParams = LinearLayout.LayoutParams(
+                        18.dp(),
+                        18.dp()
+                    ).apply {
+                        marginEnd = 8.dp()
+                    }
+                }
+            )
+
+            addView(
+                TextView(this@MainActivity).apply {
+                    this.text = text
+                    textSize = 13f
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(contentColor)
+                }
+            )
+        }
+    }
     data class GeofenceEvent(
         val landmarkId: String,
         val landmarkName: String,
@@ -390,7 +441,6 @@ class MainActivity : AppCompatActivity() {
         // Initialize managers
         geofenceManager = GeofenceManager(this)
         offlineMapManager = OfflineMapManager(this)
-        offlineDataCache = OfflineDataCache(this)
         archiveRepository = ArchiveRepository(this)
         route66DatabaseRepository = Route66DatabaseRepository(this)
         
@@ -405,13 +455,11 @@ class MainActivity : AppCompatActivity() {
         
         // Create and add MapView
         mapView = MapView(this)
+        mapView.scalebar.enabled = false
         rootLayout.addView(mapView, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
-        
-        // C1: Create offline status bar at top
-        createOfflineStatusBar(rootLayout)
 
         // Create and add Geofence Monitor UI
         createGeofenceMonitorUI(rootLayout)
@@ -427,6 +475,19 @@ class MainActivity : AppCompatActivity() {
         createArchiveDetailCard(rootLayout)
 
         setContentView(rootLayout)
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            view.setPadding(
+                systemBars.left,
+                systemBars.top,
+                systemBars.right,
+                systemBars.bottom
+            )
+
+            insets
+        }
         //onboarding
         if (!hasSeenOnboarding()) {
             createOnboardingOverlay(rootLayout)
@@ -508,9 +569,6 @@ class MainActivity : AppCompatActivity() {
             )
         }
         
-        // C1: Initialize offline cache on startup
-        initializeOfflineCache()
-        
         // Preload archive data in background
         Thread {
             archiveRepository.loadArchiveData()
@@ -530,54 +588,62 @@ class MainActivity : AppCompatActivity() {
      */
     private fun createOnboardingOverlay(rootLayout: FrameLayout) {
         onboardingOverlay = FrameLayout(this).apply {
-            setBackgroundColor(Color.parseColor("#CC000000")) // translucent black
+            setBackgroundColor(Color.parseColor("#E6000000")) // darker shadowed background
             visibility = View.GONE
-            isClickable = true // blocks touches to map underneath
+            isClickable = true
             isFocusable = true
         }
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(color(R.color.card_background))
-            setPadding(24.dp(), 24.dp(), 24.dp(), 24.dp())
-            elevation = 20f
+            background = androidx.core.content.ContextCompat.getDrawable(
+                this@MainActivity,
+                R.drawable.bg_onboarding_card
+            )
+            setPadding(24.dp(), 28.dp(), 24.dp(), 24.dp())
+            elevation = 32f
         }
 
         val title = TextView(this).apply {
-            textSize = 20f
+            textSize = 21f
             setTypeface(null, Typeface.BOLD)
             setTextColor(color(R.color.text_primary))
+            gravity = Gravity.CENTER_HORIZONTAL
             text = "Welcome to Experience66"
         }
 
         val body = TextView(this).apply {
-            textSize = 14f
+            textSize = 14.5f
             setTextColor(color(R.color.text_secondary))
-            setLineSpacing(6f, 1.05f)
-            setPadding(0, 12.dp(), 0, 0)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setLineSpacing(8f, 1.05f)
+            setPadding(8.dp(), 14.dp(), 8.dp(), 0)
         }
 
-        // Progress dots
         val dotsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(0, 16.dp(), 0, 0)
+            setPadding(0, 18.dp(), 0, 0)
         }
 
         fun dot(isActive: Boolean): View {
             return View(this).apply {
-                val size = 8.dp()
-                layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    if (isActive) 22.dp() else 8.dp(),
+                    8.dp()
+                ).apply {
                     marginStart = 6.dp()
                     marginEnd = 6.dp()
                 }
+
                 background = androidx.core.content.ContextCompat.getDrawable(
                     this@MainActivity,
-                    android.R.drawable.presence_online
+                    R.drawable.bg_onboarding_dot
                 )
-                // presence_online is a circle-ish; we just tint it
-                backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    Color.parseColor(if (isActive) "#1976D2" else "#BDBDBD")
+
+                backgroundTintList = ColorStateList.valueOf(
+                    if (isActive) color(R.color.accent_blue)
+                    else color(R.color.text_muted)
                 )
             }
         }
@@ -585,46 +651,67 @@ class MainActivity : AppCompatActivity() {
         val d1 = dot(true)
         val d2 = dot(false)
         val d3 = dot(false)
-        val d4 = dot(false)
-        dotsRow.addView(d1); dotsRow.addView(d2); dotsRow.addView(d3); dotsRow.addView(d4)
 
-        // Buttons
+        dotsRow.addView(d1)
+        dotsRow.addView(d2)
+        dotsRow.addView(d3)
+
+        fun setDots(step: Int) {
+            fun tintDot(v: View, active: Boolean) {
+                v.backgroundTintList = ColorStateList.valueOf(
+                    if (active) color(R.color.accent_blue)
+                    else color(R.color.text_muted)
+                )
+
+                v.layoutParams = LinearLayout.LayoutParams(
+                    if (active) 22.dp() else 8.dp(),
+                    8.dp()
+                ).apply {
+                    marginStart = 6.dp()
+                    marginEnd = 6.dp()
+                }
+            }
+
+            tintDot(d1, step == 0)
+            tintDot(d2, step == 1)
+            tintDot(d3, step == 2)
+        }
+
+        val pages = listOf(
+            "Welcome to Experience66.\n\nExplore Route 66 through interactive landmarks, stories, and historic photos. Use the map to discover places around you.",
+
+            "POI Landmark Cards.\n\nTap any map marker to open a POI card. Use:\n\n• Listen to hear the story\n• More to view archive details\n• Navigate to preview and start directions",
+
+            "POI List.\n\nOpen the menu to access the POI List. Browse all landmarks, select one to view details, or quickly navigate to any location."
+        )
+
         val buttonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
-            setPadding(0, 18.dp(), 0, 0)
+            setPadding(0, 20.dp(), 0, 0)
         }
 
-        val skipBtn = Button(this).apply {
+        val skipBtn = TextView(this).apply {
             text = "Skip"
+            textSize = 14f
+            setTextColor(color(R.color.text_muted))
+            setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp())
             setOnClickListener { finishOnboarding() }
         }
 
         val nextBtn = Button(this).apply {
             text = "Next"
+            background = androidx.core.content.ContextCompat.getDrawable(
+                this@MainActivity,
+                R.drawable.btn_pill
+            )
+            backgroundTintList = ColorStateList.valueOf(color(R.color.accent_blue))
+            setTextColor(color(R.color.white))
+            isAllCaps = false
+            setPadding(24.dp(), 10.dp(), 24.dp(), 10.dp())
         }
-
-        fun setDots(step: Int) {
-            fun tintDot(v: View, active: Boolean) {
-                v.backgroundTintList = android.content.res.ColorStateList.valueOf(
-                    Color.parseColor(if (active) "#1976D2" else "#BDBDBD")
-                )
-            }
-            tintDot(d1, step == 0)
-            tintDot(d2, step == 1)
-            tintDot(d3, step == 2)
-
-        }
-
-        val pages = listOf(
-            "Explore historic Route 66 landmarks across Arizona.\n\nTap markers on the map to discover stories, photos, and archive materials.",
-            "Use the search bar to find a POI or archive item.\n\nTap any marker on the map to open its detail card. \n\nOr use the POIs button to see a list.",
-            "The ABOUT button inside a POI card will take you straight to the archive.\n\nTap NAVIGATE inside a POI card to get directions.\n\nTap LISTEN to hear the landmark description."
-        )
 
         var step = 0
-        body.text = pages[step]
-        setDots(step)
 
         fun updateStepUI() {
             body.text = pages[step]
@@ -642,7 +729,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         buttonsRow.addView(skipBtn)
-        buttonsRow.addView(View(this).apply { layoutParams = LinearLayout.LayoutParams(12.dp(), 1) })
+        buttonsRow.addView(View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(12.dp(), 1)
+        })
         buttonsRow.addView(nextBtn)
 
         card.addView(title)
@@ -668,10 +757,17 @@ class MainActivity : AppCompatActivity() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         )
-    }
 
+        updateStepUI()
+    }
     private fun showOnboarding() {
+        onboardingOverlay.alpha = 0f
         onboardingOverlay.visibility = View.VISIBLE
+
+        onboardingOverlay.animate()
+            .alpha(1f)
+            .setDuration(250)
+            .start()
     }
 
     private fun finishOnboarding() {
@@ -781,30 +877,20 @@ class MainActivity : AppCompatActivity() {
      */
     private fun setupNetworkMonitoring() {
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        
+
         networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 runOnUiThread {
                     isOnline = true
-                    updateOfflineStatusUI()
                     Log.d(TAG, "Network available - Online mode")
                 }
             }
-            
+
             override fun onLost(network: Network) {
                 runOnUiThread {
                     isOnline = false
-                    updateOfflineStatusUI()
                     Log.d(TAG, "Network lost - Offline mode")
-                    
-                    // Show toast about offline mode
-                    if (offlineDataCache.isCacheValid()) {
-                        Toast.makeText(
-                            this@MainActivity,
-                            "📴 Offline Mode - Using cached data",
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }
+
                 }
             }
         }
@@ -827,168 +913,7 @@ class MainActivity : AppCompatActivity() {
         val capabilities = connectivityManager.getNetworkCapabilities(network)
         return capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
     }
-    
-    /**
-     * C1: Create offline status bar UI
-     */
-    private fun createOfflineStatusBar(rootLayout: FrameLayout) {
-        offlineStatusBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#4CAF50")) // Green for online
-            setPadding(16, 12, 16, 12)
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        
-        // Status icon
-        offlineStatusIcon = TextView(this).apply {
-            text = "🟢"
-            textSize = 16f
-            setPadding(0, 0, 12, 0)
-        }
-        offlineStatusBar.addView(offlineStatusIcon)
-        
-        // Status text
-        offlineStatusText = TextView(this).apply {
-            text = "Online"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        offlineStatusBar.addView(offlineStatusText)
-        
-        // Progress bar (hidden by default)
-        downloadProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
-            layoutParams = LinearLayout.LayoutParams(100, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                marginEnd = 12
-            }
-            visibility = View.GONE
-            max = 100
-        }
-        offlineStatusBar.addView(downloadProgress)
 
-        val params = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            gravity = Gravity.TOP
-        }
-        rootLayout.addView(offlineStatusBar, params)
-        
-        // Initial UI update
-        updateOfflineStatusUI()
-    }
-    
-    /**
-     * C1: Update offline status UI based on connectivity and cache state
-     */
-    private fun updateOfflineStatusUI() {
-        val cacheInfo = offlineDataCache.getCacheInfo()
-
-        if (isOnline) {
-            offlineStatusBar.setBackgroundColor(Color.parseColor("#4CAF50"))
-            offlineStatusIcon.text = "🟢"
-            offlineStatusText.text = if (cacheInfo.isValid) {
-                "Online | Cache: ${cacheInfo.itemCount} items"
-            } else {
-                "Online | No cache"
-            }
-        } else {
-            offlineStatusBar.setBackgroundColor(Color.parseColor("#FF9800"))
-            offlineStatusIcon.text = "📴"
-            offlineStatusText.text = if (cacheInfo.isValid) {
-                "Offline | Using cache (${cacheInfo.itemCount} items)"
-            } else {
-                "Offline | No cache available!"
-            }
-
-            if (!cacheInfo.isValid) {
-                offlineStatusBar.setBackgroundColor(Color.parseColor("#F44336"))
-            }
-        }
-    }
-    
-    /**
-     * C1: Handle offline download button click
-     */
-    private fun handleOfflineDownload() {
-        Toast.makeText(this, "Starting offline cache...", Toast.LENGTH_SHORT).show()
-        
-        // Show progress
-        if (::downloadProgress.isInitialized) {
-            downloadProgress.visibility = View.VISIBLE
-            downloadProgress.progress = 0
-        }
-
-        // Cache landmark metadata first
-        val metadataCached = offlineDataCache.cacheLandmarksData()
-        
-        if (metadataCached) {
-            downloadProgress.progress = 30
-            
-            // Check if map tiles already downloaded
-            offlineMapManager.checkOfflineRegionExists { exists, size ->
-                runOnUiThread {
-                    if (exists) {
-                        // Already have offline maps
-                        downloadProgress.progress = 100
-                        completeOfflineDownload(true, "Cache updated! Maps: ${size/1024/1024}MB")
-                    } else {
-                        // Download map tiles
-                        downloadProgress.progress = 40
-                        offlineMapManager.downloadArizonaRoute66Region(
-                            onProgress = { progress ->
-                                runOnUiThread {
-                                    downloadProgress.progress = (40 + progress * 0.6).toInt()
-                                }
-                            },
-                            onComplete = { success, message ->
-                                runOnUiThread {
-                                    completeOfflineDownload(success, message)
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-        } else {
-            completeOfflineDownload(false, "Failed to cache metadata")
-        }
-    }
-    //NO LONGER NECESSARY v
-    /**
-     * C1: Complete offline download process
-     */
-    private fun completeOfflineDownload(success: Boolean, message: String) {
-        if (::downloadProgress.isInitialized) downloadProgress.visibility = View.GONE
-
-
-        updateOfflineStatusUI()
-        
-        if (success) {
-            Toast.makeText(this, "✅ $message", Toast.LENGTH_LONG).show()
-            Log.d(TAG, "Offline cache complete: $message")
-        } else {
-            Toast.makeText(this, "❌ $message", Toast.LENGTH_LONG).show()
-            Log.e(TAG, "Offline cache failed: $message")
-        }
-    }
-    //NO LONGER NECESSARY v
-    /**
-     * C1: Initialize offline cache on startup
-     */
-    private fun initializeOfflineCache() {
-        if (!offlineDataCache.isCacheValid()) {
-            // Auto-cache on first launch if online
-            if (isOnline) {
-                offlineDataCache.cacheLandmarksData()
-                Log.d(TAG, "Initial offline cache created")
-            }
-        } else {
-            val cacheInfo = offlineDataCache.getCacheInfo()
-            Log.d(TAG, "Offline cache loaded: ${cacheInfo.itemCount} items, last updated: ${cacheInfo.lastUpdated}")
-        }
-    }
     private fun createTopSearchAndButtons(rootLayout: FrameLayout) {
         topContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1022,6 +947,7 @@ class MainActivity : AppCompatActivity() {
             setColorFilter(color(R.color.text_primary))
 
             setOnClickListener {
+                closeAllOverlays()
                 toggleSideMenu()
             }
         }
@@ -1069,6 +995,11 @@ class MainActivity : AppCompatActivity() {
 
                 override fun afterTextChanged(s: Editable?) {}
             })
+            setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    closeAllOverlays()
+                }
+            }
         }
 
         searchClearBtn = TextView(this).apply {
@@ -1131,7 +1062,7 @@ class MainActivity : AppCompatActivity() {
         rootLayout.addView(topContainer, params)
 
         rootLayout.post {
-            params.topMargin = offlineStatusBar.height + 8.dp()
+            params.topMargin = 8.dp()
             topContainer.layoutParams = params
         }
     }
@@ -1139,7 +1070,7 @@ class MainActivity : AppCompatActivity() {
         sideMenuOverlay = View(this).apply {
             setBackgroundColor(Color.parseColor("#66000000"))
             visibility = View.GONE
-            setOnClickListener { hideSideMenu() }
+            setOnClickListener { closeAllOverlays() }
         }
 
         rootLayout.addView(
@@ -1268,6 +1199,7 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
+
     private fun createCircleMapButton(
         iconRes: Int? = null,
         text: String? = null,
@@ -1275,16 +1207,20 @@ class MainActivity : AppCompatActivity() {
         textColor: Int = color(R.color.text_primary),
         onClick: () -> Unit
     ): FrameLayout {
-        val size = 40.dp()
+        val size = 56.dp()
 
         return FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(size, size).apply {
-                bottomMargin = 8.dp()
+                bottomMargin = 12.dp()
             }
 
             background = androidx.core.content.ContextCompat.getDrawable(
                 this@MainActivity,
                 R.drawable.btn_circle
+            )
+
+            backgroundTintList = android.content.res.ColorStateList.valueOf(
+                color(R.color.card_background)
             )
 
             elevation = 10f
@@ -1296,10 +1232,12 @@ class MainActivity : AppCompatActivity() {
                 addView(
                     ImageView(this@MainActivity).apply {
                         setImageResource(iconRes)
+
                         val iconSize = when (iconRes) {
-                            R.drawable.route66_icon -> 24.dp()
-                            R.drawable.user_location_dot -> 16.dp()
-                            else -> 16.dp()
+                            R.drawable.route66_icon -> 32.dp()
+                            R.drawable.user_location_dot -> 22.dp()
+                            R.drawable.ic_compass -> 36.dp()
+                            else -> 22.dp()
                         }
 
                         layoutParams = FrameLayout.LayoutParams(
@@ -1309,7 +1247,7 @@ class MainActivity : AppCompatActivity() {
                         )
 
                         if (iconRes != R.drawable.route66_icon && iconRes != R.drawable.ic_compass) {
-                            setColorFilter(iconTint)
+                            imageTintList = ColorStateList.valueOf(iconTint)
                         }
                     }
                 )
@@ -1354,10 +1292,11 @@ class MainActivity : AppCompatActivity() {
         }
         val compassBtn = createCircleMapButton(
             iconRes = R.drawable.ic_compass,
-            iconTint = color(R.color.white)
+            iconTint = color(R.color.text_primary)
         ) {
             mapView.mapboxMap.setCamera(CameraOptions.Builder().bearing(0.0).build())
         }
+
         controlsColumn.addView(compassBtn)
         controlsColumn.addView(locationBtn)
         controlsColumn.addView(route66Btn)
@@ -1550,7 +1489,7 @@ class MainActivity : AppCompatActivity() {
         // Open Archive Item button
         archiveOpenButton = Button(this).apply {
             text = "🌐 Open Archive Item"
-            setBackgroundColor(color(R.color.accent_green))
+            setBackgroundColor(color(R.color.poi_green))
             setTextColor(color(R.color.white))
             setPadding(24, 12, 24, 12)
             setOnClickListener {
@@ -1811,18 +1750,22 @@ class MainActivity : AppCompatActivity() {
         mapPoiClickListenerRegistered = true
         mapView.gestures.addOnMapClickListener { point ->
             val landmark = nearestPoiLandmarkWithinTapRadius(point, maxDistanceMeters = 9_000f)
+
             if (landmark != null) {
                 contentDmSearchFilterKeyword = ""
+
                 mapView.mapboxMap.setCamera(
                     CameraOptions.Builder()
                         .center(landmark.toPoint())
                         .zoom(12.0)
                         .build()
                 )
+
                 showLandmarkCard(landmark.id)
                 true
             } else {
-                false
+                closeAllOverlays()
+                true
             }
         }
     }
@@ -2646,7 +2589,7 @@ class MainActivity : AppCompatActivity() {
             elevation = 18f
             clipToPadding = false
             visibility = View.GONE
-            setPadding(0, 0, 0, 16.dp())
+            setPadding(0, 0, 0, 20.dp())
         }
 
         val headerRow = LinearLayout(this).apply {
@@ -2686,10 +2629,9 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 220.dp()
             )
-            adjustViewBounds = true
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setBackgroundColor(Color.parseColor("#E8E8E8"))
-            setImageDrawable(ColorDrawable(Color.parseColor("#E8E8E8")))
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            adjustViewBounds = false
+            setImageResource(R.mipmap.ic_launcher)
         }
         detailCard.addView(detailImageView)
 
@@ -2704,7 +2646,7 @@ class MainActivity : AppCompatActivity() {
         detailDistanceText = TextView(this).apply {
             textSize = 13.5f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(color(R.color.accent_green))
+            setTextColor(color(R.color.poi_green))
             setPadding(16.dp(), 0, 16.dp(), 8.dp())
             visibility = View.GONE
         }
@@ -2717,60 +2659,45 @@ class MainActivity : AppCompatActivity() {
         }
         detailCard.addView(detailExtraText)
 
-        val buttonRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(16.dp(), 0, 16.dp(), 0)
+        val listenBtn = createPillButton(
+            text = "Listen",
+            iconRes = R.drawable.volume_up,
+            bgColor = color(R.color.blue_tonal),
+            contentColor = color(R.color.poi_blue)
+        ) {
+            readCurrentLandmark()
         }
 
-        fun styleButton(button: Button, colorRes: Int) {
-            button.background = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.btn_pill)
-            button.backgroundTintList =
-                android.content.res.ColorStateList.valueOf(color(colorRes))
-            button.setTextColor(color(R.color.white))
-            button.textSize = 12f
-            button.isAllCaps = false
+        val moreBtn = createPillButton(
+            text = "More",
+            iconRes = R.drawable.more_info,
+            bgColor = color(R.color.purple_tonal),
+            contentColor = color(R.color.poi_purple)
+        ) {
+            openAboutForCurrentLandmark()
         }
 
-        detailListenButton = Button(this).apply {
-            text = "🔊 Listen"
-            setOnClickListener { readCurrentLandmark() }
-        }
-
-        detailAboutButton = Button(this).apply {
-            text = "ℹ️ More"
-            setOnClickListener { openAboutForCurrentLandmark() }
-        }
-
-        val navigateButton = Button(this).apply {
-            text = "Navigate"
-            setOnClickListener {
-                val dest = currentDestinationPoint
-                if (dest != null) {
-                    startNavigationTo(dest)
-                } else {
-                    Toast.makeText(
-                        this@MainActivity,
-                        "No navigation target available",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
+        val navigateBtn = createPillButton(
+            text = "Navigate",
+            iconRes = R.drawable.navigation,
+            bgColor = color(R.color.green_tonal),
+            contentColor = color(R.color.poi_green)
+        ) {
+            val dest = currentDestinationPoint
+            if (dest != null) {
+                startNavigationTo(dest)
             }
         }
 
-        styleButton(detailListenButton, R.color.accent_blue)
-        styleButton(detailAboutButton, R.color.accent_purple)
-        styleButton(navigateButton, R.color.accent_green)
-
-        fun addSpacer() {
-            buttonRow.addView(View(this).apply {
-                layoutParams = LinearLayout.LayoutParams(12, 1)
-            })
+        val buttonRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(12.dp(), 10.dp(), 12.dp(), 8)
         }
 
-        buttonRow.addView(detailListenButton); addSpacer()
-        buttonRow.addView(detailAboutButton); addSpacer()
-        buttonRow.addView(navigateButton)
+        buttonRow.addView(listenBtn)
+        buttonRow.addView(moreBtn)
+        buttonRow.addView(navigateBtn)
 
         detailCard.addView(buttonRow)
 
@@ -2797,22 +2724,17 @@ class MainActivity : AppCompatActivity() {
         val lm = route66DatabaseRepository.findLandmarkById(landmarkId)
             ?: ArizonaLandmarks.findById(landmarkId)
 
-        val cached = offlineDataCache
-            .getCachedLandmarks()
-            .firstOrNull { it.id == landmarkId }
-
         // Prefer CUpdated.csv row for title, long description, and image URL (accurate per LocationID).
         val dbEntry = route66DatabaseRepository.findDatabaseEntryByLandmarkId(landmarkId)
             ?: lm?.let { route66DatabaseRepository.findDatabaseEntryForLandmark(it) }
 
         val title = dbEntry?.name?.trim()?.takeIf { it.isNotBlank() }
             ?: lm?.name?.takeIf { it.isNotBlank() }
-            ?: cached?.name
             ?: "Unknown Landmark"
 
         val description = dbEntry?.description?.trim()?.takeIf { it.isNotBlank() }
             ?: lm?.description?.takeIf { it.isNotBlank() }
-            ?: cached?.description.orEmpty()
+            ?: ""
 
         val extra = buildString {
             dbEntry?.let { e ->
@@ -2827,9 +2749,6 @@ class MainActivity : AppCompatActivity() {
                     append("Source: ").append(s)
                 }
             }
-            if (isEmpty() && cached != null) {
-                append(cached.historicalNotes).append("\nEstablished: ").append(cached.yearEstablished)
-            }
         }
 
         detailTitleText.text = title
@@ -2837,8 +2756,7 @@ class MainActivity : AppCompatActivity() {
         detailDescriptionText.text = description
         detailExtraText.text = extra
 
-        val landmarkForNav = lm ?: cached?.let { landmarkFromOfflineCache(it) }
-        currentDestinationPoint = landmarkForNav?.toPoint()
+        currentDestinationPoint = lm?.toPoint()
 
         if (triggerToPoiDistanceMeters != null) {
             detailDistanceText.text =
@@ -2847,52 +2765,77 @@ class MainActivity : AppCompatActivity() {
         } else {
             detailDistanceText.text = "Distance unavailable. Waiting for your current location."
             detailDistanceText.visibility = View.VISIBLE
-            val lmForDistance = lm ?: cached?.let { landmarkFromOfflineCache(it) }
-            if (lmForDistance != null) {
-                updateDistanceFromLastKnownLocation(landmarkId, lmForDistance)
+            if (lm != null) {
+                updateDistanceFromLastKnownLocation(landmarkId, lm)
             }
         }
 
+        detailCard.alpha = 0f
+        detailCard.translationY = 80.dp().toFloat()
         detailCard.visibility = View.VISIBLE
+
+        detailCard.animate()
+            .translationY(0f)
+            .alpha(1f)
+            .setDuration(220)
+            .setInterpolator(AccelerateDecelerateInterpolator())
+            .start()
         
         // Find and store archive items for this landmark (for About button)
-        val lmForArchive = lm ?: cached?.let { landmarkFromOfflineCache(it) }
-        if (lmForArchive != null) {
+        if (lm != null) {
             Thread {
-                val matchedItems = findArchiveItemsForLandmark(lmForArchive, contentDmSearchFilterKeyword)
+                val matchedItems = findArchiveItemsForLandmark(lm, contentDmSearchFilterKeyword)
                 runOnUiThread {
                     currentLandmarkArchiveItems = matchedItems
                     if (matchedItems.isNotEmpty()) {
-                        Log.d(TAG, "Found ${matchedItems.size} archive items for ${lmForArchive.name}")
+                        Log.d(TAG, "Found ${matchedItems.size} archive items for ${lm.name}")
                     }
                 }
             }.start()
         }
-
-        // Auto read when opened ( you can remove this line to only read on button press)
-        //readTextForLandmark(title, description, extra)
-    }
-
-    private fun landmarkFromOfflineCache(c: OfflineDataCache.CachedLandmarkData): Route66Landmark {
-        return Route66Landmark(
-            id = c.id,
-            name = c.name,
-            description = c.description,
-            latitude = c.latitude,
-            longitude = c.longitude,
-            radiusMeters = c.radiusMeters
-        )
     }
 
     /**
      * Hide the card and stop any speech.
      */
     private fun hideLandmarkCard() {
-        detailCard.visibility = View.GONE
-        detailDistanceText.visibility = View.GONE
-        currentLandmarkId = null
-        distanceModeTriggerToPoi = false
+        if (!::detailCard.isInitialized || detailCard.visibility != View.VISIBLE) return
+
         tts?.stop()
+
+        detailCard.animate()
+            .translationY(detailCard.height.toFloat() + 80.dp())
+            .alpha(0f)
+            .setDuration(220)
+            .setInterpolator(AccelerateDecelerateInterpolator())
+            .withEndAction {
+                detailCard.visibility = View.GONE
+                detailCard.translationY = 0f
+                detailCard.alpha = 1f
+
+                detailDistanceText.visibility = View.GONE
+                currentLandmarkId = null
+                distanceModeTriggerToPoi = false
+            }
+            .start()
+    }
+    private fun closeAllOverlays() {
+        if (::detailCard.isInitialized && detailCard.visibility == View.VISIBLE) {
+            hideLandmarkCard()
+        }
+
+        if (::archiveDetailCard.isInitialized && archiveDetailCard.visibility == View.VISIBLE) {
+            hideArchiveDetailCard()
+        }
+
+        if (isSearchVisible) {
+            searchPanel.visibility = View.GONE
+            isSearchVisible = false
+        }
+
+        if (isSideMenuOpen) {
+            hideSideMenu()
+        }
     }
 
     /**

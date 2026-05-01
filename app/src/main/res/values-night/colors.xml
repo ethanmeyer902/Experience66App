@@ -1,11 +1,17 @@
 <resources>
 
     <!-- Brand Colors -->
-    <color name="accent_blue">#2196F3</color>
+    <color name="accent_blue">#1565C0</color>
+    <color name="poi_blue">#64B5F6</color>
     <color name="accent_orange">#FF7A00</color>
-    <color name="accent_green">#4CAF50</color>
+    <color name="poi_green">#81C784</color>
     <color name="accent_red">#F44336</color>
-    <color name="accent_purple">#9C27B0</color>
+    <color name="poi_purple">#E1B5FF</color>
+
+    <!--tonal backgrounds -->
+    <color name="blue_tonal">#2A4F7A</color>
+    <color name="purple_tonal">#3A2450</color>
+    <color name="green_tonal">#2A5A3A</color>
 
 
     <!-- Backgrounds -->
