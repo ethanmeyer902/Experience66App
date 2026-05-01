@@ -243,55 +243,56 @@ class MainActivity : AppCompatActivity() {
         contentColor: Int,
         onClick: () -> Unit
     ): LinearLayout {
-        val height = 46.dp()
+        val height = 38.dp()
 
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER
 
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                height
+                0,
+                height,
+                1f
             ).apply {
-                marginEnd = 10.dp()
+                marginStart = 4.dp()
+                marginEnd = 4.dp()
             }
 
-            setPadding(12.dp(), 0, 12.dp(), 0)
+            setPadding(8.dp(), 0, 8.dp(), 0)
             elevation = 4f
 
             background = androidx.core.content.ContextCompat.getDrawable(
                 this@MainActivity,
                 R.drawable.btn_pill
             )
-
             backgroundTintList = ColorStateList.valueOf(bgColor)
 
+            isClickable = true
+            isFocusable = true
             setOnClickListener { onClick() }
 
-            addView(
-                ImageView(this@MainActivity).apply {
-                    setImageResource(iconRes)
-                    setColorFilter(contentColor)
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(iconRes)
+                setColorFilter(contentColor)
 
-                    layoutParams = LinearLayout.LayoutParams(
-                        18.dp(),
-                        18.dp()
-                    ).apply {
-                        marginEnd = 8.dp()
-                    }
+                layoutParams = LinearLayout.LayoutParams(
+                    16.dp(),
+                    16.dp()
+                ).apply {
+                    marginEnd = 6.dp()
                 }
-            )
+            })
 
-            addView(
-                TextView(this@MainActivity).apply {
-                    this.text = text
-                    textSize = 13f
-                    setTypeface(null, Typeface.BOLD)
-                    setTextColor(contentColor)
-                }
-            )
+            addView(TextView(this@MainActivity).apply {
+                this.text = text
+                textSize = 11.5f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(contentColor)
+                maxLines = 1
+            })
         }
     }
+
     data class GeofenceEvent(
         val landmarkId: String,
         val landmarkName: String,
@@ -1207,11 +1208,11 @@ class MainActivity : AppCompatActivity() {
         textColor: Int = color(R.color.text_primary),
         onClick: () -> Unit
     ): FrameLayout {
-        val size = 56.dp()
+        val size = 48.dp()
 
         return FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(size, size).apply {
-                bottomMargin = 12.dp()
+                bottomMargin = 10.dp()
             }
 
             background = androidx.core.content.ContextCompat.getDrawable(
@@ -1234,10 +1235,10 @@ class MainActivity : AppCompatActivity() {
                         setImageResource(iconRes)
 
                         val iconSize = when (iconRes) {
-                            R.drawable.route66_icon -> 32.dp()
-                            R.drawable.user_location_dot -> 22.dp()
-                            R.drawable.ic_compass -> 36.dp()
-                            else -> 22.dp()
+                            R.drawable.route66_icon -> 28.dp()
+                            R.drawable.user_location_dot -> 20.dp()
+                            R.drawable.ic_compass -> 26.dp()
+                            else -> 20.dp()
                         }
 
                         layoutParams = FrameLayout.LayoutParams(
@@ -2589,7 +2590,7 @@ class MainActivity : AppCompatActivity() {
             elevation = 18f
             clipToPadding = false
             visibility = View.GONE
-            setPadding(0, 0, 0, 20.dp())
+            setPadding(0, 0, 0, 12.dp())
         }
 
         val headerRow = LinearLayout(this).apply {
@@ -2692,7 +2693,7 @@ class MainActivity : AppCompatActivity() {
         val buttonRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(12.dp(), 10.dp(), 12.dp(), 8)
+            setPadding(8.dp(), 6.dp(), 8.dp(), 0)
         }
 
         buttonRow.addView(listenBtn)

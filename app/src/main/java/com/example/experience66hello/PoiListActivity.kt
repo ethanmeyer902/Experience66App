@@ -24,6 +24,8 @@ import android.widget.ImageView
 import com.google.android.gms.location.LocationServices
 import android.content.res.ColorStateList
 import android.widget.FrameLayout
+import coil.load
+import coil.size.Scale
 
 class PoiListActivity : AppCompatActivity() {
 
@@ -96,6 +98,7 @@ class PoiListActivity : AppCompatActivity() {
         }
 
         poiAdapter = PoiAdapter(
+            route66Repository = route66Repository,
             onShow = { landmark ->
                 val data = Intent().putExtra("landmark_id", landmark.id)
                 setResult(RESULT_OK, data)
@@ -317,6 +320,7 @@ class PoiListActivity : AppCompatActivity() {
 }
 
 private class PoiAdapter(
+    private val route66Repository: Route66DatabaseRepository,
     private val onShow: (Route66Landmark) -> Unit,
     private val onNavigate: (Route66Landmark) -> Unit,
     private val onAbout: (Route66Landmark) -> Unit,
@@ -355,16 +359,18 @@ private class PoiAdapter(
             return LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(14.dp(), 0, 14.dp(), 0)
+                setPadding(6.dp(), 0, 6.dp(), 0)
                 elevation = 4f
                 isClickable = true
                 isFocusable = true
 
                 layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    40.dp()
+                    0,
+                    38.dp(),
+                    1f
                 ).apply {
-                    marginEnd = 10.dp()
+                    marginStart = 4.dp()
+                    marginEnd = 4.dp()
                 }
 
                 background = androidx.core.content.ContextCompat.getDrawable(
@@ -378,16 +384,16 @@ private class PoiAdapter(
                     setImageResource(iconRes)
                     setColorFilter(contentColor)
                     layoutParams = LinearLayout.LayoutParams(
-                        18.dp(),
-                        18.dp()
+                        16.dp(),
+                        16.dp()
                     ).apply {
-                        marginEnd = 8.dp()
+                        marginEnd = 5.dp()
                     }
                 })
 
                 addView(TextView(context).apply {
                     this.text = text
-                    textSize = 13f
+                    textSize = 11.5f
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(contentColor)
                 })
@@ -459,7 +465,7 @@ private class PoiAdapter(
         val buttonRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
-            setPadding(18.dp(), 8.dp(), 18.dp(), 16.dp())
+            setPadding(10.dp(), 6.dp(), 10.dp(), 12.dp())
         }
 
         val listenBtn = createPillButton(
@@ -477,7 +483,7 @@ private class PoiAdapter(
         )
 
         val navigateBtn = createPillButton(
-            text = "Navigate",
+            text = "Nav",
             iconRes = R.drawable.navigation,
             bgColorRes = R.color.green_tonal,
             contentColorRes = R.color.poi_green
@@ -521,20 +527,22 @@ private class PoiAdapter(
         if (isExpanded) {
             holder.image.visibility = View.VISIBLE
 
-            val imageName = item.id.lowercase()
-                .replace("-", "_")
-                .replace(" ", "_")
-
-            val imageResId = holder.itemView.context.resources.getIdentifier(
-                imageName,
-                "drawable",
-                holder.itemView.context.packageName
+            val imageUrl = route66Repository.resolveCsvImageUrlForPoi(
+                item.id,
+                item,
+                item.name
             )
 
-            if (imageResId != 0) {
-                holder.image.setImageResource(imageResId)
+            if (!imageUrl.isNullOrBlank()) {
+                holder.image.load(imageUrl) {
+                    scale(Scale.FIT)
+                    crossfade(true)
+                    allowHardware(false)
+                    placeholder(R.drawable.route66_icon)
+                    error(R.drawable.route66_icon)
+                }
             } else {
-                holder.image.setImageResource(R.drawable.ic_launcher_foreground) // safe fallback
+                holder.image.setImageResource(R.drawable.route66_icon)
             }
 
             holder.descriptionText.text = fullDescription
