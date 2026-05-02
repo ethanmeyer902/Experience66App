@@ -21,8 +21,8 @@
 
             <ImageButton
                 android:id="@+id/buttonBack"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:src="@drawable/ic_arrow_back"
                 app:tint="@color/text_primary"
@@ -53,6 +53,22 @@
             android:textColor="@color/text_secondary"
             android:textSize="16sp"
             android:paddingBottom="16dp" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Archive Information"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:paddingBottom="8dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Historical information, images, and archive content in Experience 66 come from Northern Arizona University Cline Library Special Collections and Archives. This app uses those materials from CONTENTdm to connect Route 66 landmarks with trusted archival content."
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp"
+            android:paddingBottom="16dp" />
         <!-- Team Section -->
         <TextView
             android:layout_width="match_parent"
@@ -79,7 +95,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Mike Taylor, Mark Manone"
+            android:text="Mike Taylor, Mark Manone, Sean Evans"
             android:textColor="@color/text_secondary"
             android:textSize="16sp"
             android:paddingBottom="16dp" />

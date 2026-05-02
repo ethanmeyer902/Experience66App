@@ -679,7 +679,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val pages = listOf(
-            "Welcome to Experience66.\n\nExplore Route 66 through interactive landmarks, stories, and historic photos. Use the map to discover places around you.",
+            "Explore Route 66 through interactive landmarks, stories, and historic photos. Use the map to discover places around you.",
 
             "POI Landmark Cards.\n\nTap any map marker to open a POI card. Use:\n\n• Listen to hear the story\n• More to view archive details\n• Navigate to preview and start directions",
 
