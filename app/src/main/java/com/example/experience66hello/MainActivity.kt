@@ -1297,7 +1297,7 @@ class MainActivity : AppCompatActivity() {
                     ImageView(this@MainActivity).apply {
                         setImageResource(iconRes)
                         val iconSize = when (iconRes) {
-                            R.drawable.route66_icon -> 24.dp()
+                            R.drawable.ic_menu -> 24.dp()
                             R.drawable.user_location_dot -> 16.dp()
                             else -> 16.dp()
                         }
@@ -1308,7 +1308,7 @@ class MainActivity : AppCompatActivity() {
                             Gravity.CENTER
                         )
 
-                        if (iconRes != R.drawable.route66_icon && iconRes != R.drawable.ic_compass) {
+                        if (iconRes != R.drawable.ic_menu && iconRes != R.drawable.ic_compass) {
                             setColorFilter(iconTint)
                         }
                     }
@@ -1341,7 +1341,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val route66Btn = createCircleMapButton(
-            iconRes = R.drawable.route66_icon
+            iconRes = R.drawable.ic_menu
         ) {
             zoomToRoute66Overview()
         }
@@ -3142,11 +3142,26 @@ class MainActivity : AppCompatActivity() {
     /** Loads the POI header image from CSV `Image_URL` for this [landmarkId]; [cardTitle] is used to validate row keywords. */
     private fun bindLandmarkCardImageFromCsv(landmarkId: String, lm: Route66Landmark?, cardTitle: String) {
         val keyword = listOf(cardTitle, lm?.name.orEmpty()).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        val dbEntry = route66DatabaseRepository.findDatabaseEntryByLandmarkId(landmarkId)
+            ?: lm?.let { route66DatabaseRepository.findDatabaseEntryForLandmark(it) }
+        val isPendingImage = dbEntry?.imageUrl?.equals("PENDING", ignoreCase = true) == true
         val url = route66DatabaseRepository.resolveCsvImageUrlForPoi(landmarkId, lm, cardTitle)
         if (url.isNullOrBlank()) {
             Log.w(TAG, "No CSV Image_URL for keyword='$keyword' landmarkId=$landmarkId (CUpdated.csv Name / Image_URL)")
-            // Requirement: when CSV image is pending/missing, use route66_icon fallback.
-            detailImageView.setImageResource(R.drawable.route66_icon)
+            if (isPendingImage) {
+                detailImageView.load("file:///android_asset/E66logo.jpg") {
+                    scale(Scale.FIT)
+                    crossfade(true)
+                    allowHardware(false)
+                }
+            } else {
+                // Existing fallback for missing/non-HTTP image URL.
+                detailImageView.load("file:///android_asset/E66logo.jpg") {
+                    scale(Scale.FIT)
+                    crossfade(true)
+                    allowHardware(false)
+                }
+            }
             return
         }
 
