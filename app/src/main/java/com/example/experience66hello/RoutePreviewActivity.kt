@@ -33,6 +33,14 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import kotlin.math.roundToInt
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import java.text.SimpleDateFormat
+import java.util.Date
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import android.view.View
 
 class RoutePreviewActivity : AppCompatActivity() {
 
@@ -84,6 +92,21 @@ class RoutePreviewActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_route_preview)
 
+        val rootLayout = findViewById<View>(android.R.id.content)
+
+        ViewCompat.setOnApplyWindowInsetsListener(rootLayout) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+
+            view.setPadding(
+                systemBars.left,
+                systemBars.top,
+                systemBars.right,
+                systemBars.bottom
+            )
+
+            insets
+        }
+
         mapView = findViewById(R.id.mapViewRoutePreview)
         destinationNameText = findViewById(R.id.textDestinationName)
         routeDistanceText = findViewById(R.id.textRouteDistance)
@@ -91,6 +114,9 @@ class RoutePreviewActivity : AppCompatActivity() {
         buttonOpenGoogleMaps = findViewById(R.id.buttonOpenGoogleMaps)
 
         val buttonBack = findViewById<ImageButton>(R.id.buttonBack)
+        buttonBack.setColorFilter(
+            androidx.core.content.ContextCompat.getColor(this, R.color.text_primary)
+        )
         buttonBack.setOnClickListener { finish() }
 
         val destination = getDestinationPoint()
@@ -98,16 +124,35 @@ class RoutePreviewActivity : AppCompatActivity() {
             .ifBlank { "Destination" }
 
         destinationNameText.text = destinationName
-        routeDistanceText.text = "Distance: --"
-        routeEtaText.text = "ETA: --"
+        routeDistanceText.text = ""
+        routeEtaText.text = ""
 
         buttonOpenGoogleMaps.setOnClickListener {
             if (destination != null) {
-                NavigationHelper.openGoogleMaps(this, destination)
+                val uri = Uri.parse(
+                    "google.navigation:q=${destination.latitude()},${destination.longitude()}&mode=d"
+                )
+
+                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    setPackage("com.google.android.apps.maps")
+                }
+
+                try {
+                    startActivity(intent)
+                } catch (e: ActivityNotFoundException) {
+                    val browserUri = Uri.parse(
+                        "https://www.google.com/maps/dir/?api=1" +
+                                "&destination=${destination.latitude()},${destination.longitude()}" +
+                                "&travelmode=driving"
+                    )
+                    startActivity(Intent(Intent.ACTION_VIEW, browserUri))
+                }
             }
         }
 
-        mapView.mapboxMap.loadStyle(Style.STANDARD) {
+        val mapStyle = if (darkModeEnabled) Style.DARK else Style.STANDARD
+
+        mapView.mapboxMap.loadStyle(mapStyle) {
             checkLocationPermissionAndContinue()
         }
     }
@@ -206,10 +251,19 @@ class RoutePreviewActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
 
+                val now = System.currentTimeMillis()
+                val durationMillis = routeResult.durationSeconds * 1000
+                val arrivalTime = now + durationMillis
+
+                val formatter = SimpleDateFormat("h:mm a", Locale.getDefault())
+                val startTime = formatter.format(Date(now))
+                val endTime = formatter.format(arrivalTime)
+
                 routeDistanceText.text =
-                    "Distance: ${RouteDirectionsHelper.formatMiles(routeResult.distanceMeters)}"
-                routeEtaText.text =
-                    "ETA: ${RouteDirectionsHelper.formatDuration(routeResult.durationSeconds)}"
+                    "${RouteDirectionsHelper.formatDuration(routeResult.durationSeconds)} • " +
+                            RouteDirectionsHelper.formatMiles(routeResult.distanceMeters)
+
+                routeEtaText.text = "ETA: $endTime"
 
                 drawRouteGeometry(routeResult.geometry, origin, destination)
             }
@@ -236,7 +290,12 @@ class RoutePreviewActivity : AppCompatActivity() {
                     lineCap(LineCap.ROUND)
                     lineJoin(LineJoin.ROUND)
                     lineWidth(6.0)
-                    lineColor("#FF7A00")
+                    val routeColor = if (AppCompatDelegate.getDefaultNightMode() == AppCompatDelegate.MODE_NIGHT_YES) {
+                        "#E65100"   // deep amber (much easier on eyes)
+                    } else {
+                        "#FF9800"   // material orange (cleaner than FF7A00)
+                    }
+                    lineColor(routeColor)
                     lineOpacity(0.9)
                 }
             )
