@@ -1954,17 +1954,18 @@ class MainActivity : AppCompatActivity() {
     private fun drawGeofenceCircleAnnotation(landmark: Route66Landmark, applyActiveHighlight: Boolean) {
         val isActive = applyActiveHighlight && activeLandmarks.contains(landmark.id)
         val color = if (isActive) "#4CAF50" else "#4A90D9"
-        val opacity = if (isActive) 0.4 else 0.25
         val strokeW = if (isActive) 3.0 else 2.0
         val strokeC = if (isActive) "#2E7D32" else "#2E5A8B"
         val radiusPx = geofenceRadiusToScreenPixels(landmark.latitude, landmark.radiusMeters)
+        // Geofence radii and redraw/highlight logic unchanged; fill/stroke fully transparent so circles are not visible.
         val circleOptions = CircleAnnotationOptions()
             .withPoint(landmark.toPoint())
             .withCircleRadius(radiusPx)
             .withCircleColor(color)
-            .withCircleOpacity(opacity)
+            .withCircleOpacity(0.0)
             .withCircleStrokeWidth(strokeW)
             .withCircleStrokeColor(strokeC)
+            .withCircleStrokeOpacity(0.0)
         circleAnnotationManager?.create(circleOptions)
     }
 
