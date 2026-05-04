@@ -220,7 +220,8 @@ object Route66DatabaseParser {
                 county = getValue("County").takeIf { it.isNotBlank() },
                 latitude = latitude,
                 longitude = longitude,
-                imageUrl = getValue("Image_URL").takeIf { it.isNotBlank() && !it.equals("PENDING", ignoreCase = true) },
+                // Keep raw CSV value so UI can distinguish PENDING vs missing.
+                imageUrl = getValue("Image_URL").takeIf { it.isNotBlank() },
                 imageTitle = getValue("Image_Title").takeIf { it.isNotBlank() },
                 source = getValue("Source").takeIf { it.isNotBlank() },
             )

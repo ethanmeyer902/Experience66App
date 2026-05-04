@@ -9,7 +9,9 @@ import android.util.Log
  */
 class Route66DatabaseRepository(private val context: Context) {
     private val testingPoiName = "Testing POI"
-    private val testingPoiRadiusMeters = 1126.54f // 0.7 mile
+    private val testingPoiRadiusMeters = 0.01f // 0.7 mile
+    private val routeOverlapOverrideIds = setOf("az027", "az028") // Cool Springs, Sitgreaves Pass
+    private val routeOverlapOverrideRadiusMeters = 26f * Route66Landmark.ONE_MILE_IN_METERS
     
     private var databaseEntries: List<Route66DatabaseEntry> = emptyList()
     private var landmarks: List<Route66Landmark> = emptyList()
@@ -55,6 +57,21 @@ class Route66DatabaseRepository(private val context: Context) {
             landmarks = landmarks.map { lm ->
                 if (lm.name.equals(testingPoiName, ignoreCase = true)) {
                     lm.copy(radiusMeters = testingPoiRadiusMeters)
+                } else {
+                    lm
+                }
+            }
+            landmarks = landmarks.map { lm ->
+                lm.copy(
+                    radiusMeters = (lm.radiusMeters + Route66Landmark.ONE_MILE_IN_METERS)
+                        .coerceAtMost(Route66Landmark.MAX_ANDROID_GEOFENCE_RADIUS_METERS)
+                )
+            }
+            landmarks = landmarks.map { lm ->
+                if (routeOverlapOverrideIds.contains(lm.id.lowercase())) {
+                    lm.copy(
+                        radiusMeters = routeOverlapOverrideRadiusMeters
+                    )
                 } else {
                     lm
                 }

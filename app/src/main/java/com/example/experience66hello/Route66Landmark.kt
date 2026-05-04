@@ -22,6 +22,8 @@ data class Route66Landmark(
     companion object {
         /** Same radius for every POI; large enough to intersect Route 66 while driving (max ~10 km on Android). */
         const val GEOFENCE_RADIUS_METERS = 5000f
+        const val ONE_MILE_IN_METERS = 1609.344f
+        const val MAX_ANDROID_GEOFENCE_RADIUS_METERS = 10_000f
     }
 }
 
