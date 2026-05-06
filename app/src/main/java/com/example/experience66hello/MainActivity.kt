@@ -1280,7 +1280,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val route66Btn = createCircleMapButton(
-            iconRes = R.drawable.ic_menu
+            iconRes = R.drawable.route66_icon
         ) {
             zoomToRoute66Overview()
         }
